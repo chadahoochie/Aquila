@@ -96,18 +96,19 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         ArgumentNullException.ThrowIfNull(predicate);
 
         var docType = typeof(T).Name;
-        var query = Container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>()
-            .Where(x => x.DocType == docType && !x.IsDeleted);
+        var queryDef = new QueryDefinition("SELECT * FROM c WHERE c._docType = @docType AND c._isDeleted = false")
+            .WithParameter("@docType", docType);
 
-        using var iterator = query.ToFeedIterator();
+        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(queryDef);
         var results = new List<DocumentEnvelope<T>>();
+        var compiledPredicate = predicate.Compile();
 
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(ct);
             foreach (var item in response)
             {
-                results.Add(new DocumentEnvelope<T>
+                var envelope = new DocumentEnvelope<T>
                 {
                     Id = item.Id,
                     PartitionKey = item.PartitionKey,
@@ -117,7 +118,12 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
                     Version = item.Version,
                     ETag = item.ETag,
                     Data = item.Data
-                });
+                };
+
+                if (compiledPredicate(envelope))
+                {
+                    results.Add(envelope);
+                }
             }
         }
 
@@ -237,12 +243,11 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
 
         var queryText = string.IsNullOrEmpty(tenantId)
-            ? "SELECT * FROM c WHERE c.pk = @streamId AND c._docType = '$event' AND c.data.version >= @fromVersion ORDER BY c.data.version ASC"
-            : "SELECT * FROM c WHERE c.pk = @streamId AND c._docType = '$event' AND c._tenantId = @tenantId AND c.data.version >= @fromVersion ORDER BY c.data.version ASC";
+            ? "SELECT * FROM c WHERE c.pk = @streamId AND c._docType = '$event'"
+            : "SELECT * FROM c WHERE c.pk = @streamId AND c._docType = '$event' AND c._tenantId = @tenantId";
 
         var queryDef = new QueryDefinition(queryText)
-            .WithParameter("@streamId", streamId)
-            .WithParameter("@fromVersion", fromVersion);
+            .WithParameter("@streamId", streamId);
 
         if (!string.IsNullOrEmpty(tenantId))
         {
@@ -258,9 +263,19 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
             var response = await iterator.ReadNextAsync(ct);
             foreach (var item in response)
             {
-                if (item.Data is IEvent @event)
+                IEvent? @event = item.Data as IEvent;
+                if (@event == null && item.Data != null)
                 {
-                    if (string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId)
+                    var rawJson = item.Data.ToString();
+                    if (!string.IsNullOrEmpty(rawJson))
+                    {
+                        @event = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                    }
+                }
+
+                if (@event != null)
+                {
+                    if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId) && @event.Version >= fromVersion)
                     {
                         events.Add(@event);
                     }
@@ -268,7 +283,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
             }
         }
 
-        return events;
+        return events.OrderBy(e => e.Version).ToList();
     }
 
     public async Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default)

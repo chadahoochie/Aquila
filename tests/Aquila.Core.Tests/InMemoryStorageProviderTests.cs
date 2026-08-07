@@ -72,4 +72,62 @@ public sealed class InMemoryStorageProviderTests
         await Should.ThrowAsync<AquilaConcurrencyException>(() =>
             provider.Events.AppendEventsAsync(streamId, new[] { event2 }, 99));
     }
+
+    [Fact]
+    public async Task InMemoryStorageProvider_Returns_Null_For_Missing_Document_And_Header()
+    {
+        var provider = new InMemoryStorageProvider();
+
+        var doc = await provider.ReadDocumentAsync<SampleDocument>("missing-id", "missing-pk", TestContext.Current.CancellationToken);
+        doc.ShouldBeNull();
+
+        var header = await provider.Events.GetStreamHeaderAsync("non-existent-stream", ct: TestContext.Current.CancellationToken);
+        header.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task InMemoryStorageProvider_Queries_Documents_With_Predicate()
+    {
+        var provider = new InMemoryStorageProvider();
+
+        await provider.UpsertDocumentAsync(new DocumentEnvelope<SampleDocument>
+        {
+            Id = "doc-1",
+            PartitionKey = nameof(SampleDocument),
+            DocType = nameof(SampleDocument),
+            TenantId = "tenant-1",
+            Data = new SampleDocument("doc-1", "Alpha", 10m)
+        }, TestContext.Current.CancellationToken);
+
+        await provider.UpsertDocumentAsync(new DocumentEnvelope<SampleDocument>
+        {
+            Id = "doc-2",
+            PartitionKey = nameof(SampleDocument),
+            DocType = nameof(SampleDocument),
+            TenantId = "tenant-1",
+            Data = new SampleDocument("doc-2", "Beta", 50m)
+        }, TestContext.Current.CancellationToken);
+
+        var queried = await provider.QueryDocumentsAsync<SampleDocument>(x => x.Data.Price > 20m, TestContext.Current.CancellationToken);
+        queried.Count.ShouldBe(1);
+        queried[0].Data.Title.ShouldBe("Beta");
+    }
+
+    [Fact]
+    public async Task InMemoryStorageProvider_Throws_On_Invalid_Batch_Operation()
+    {
+        var provider = new InMemoryStorageProvider();
+
+        var invalidOp = new StorageOperation
+        {
+            OperationType = StorageOperationType.Upsert,
+            Id = "",
+            PartitionKey = "pk",
+            DocType = nameof(SampleDocument),
+            Document = new SampleDocument("", "Title", 10m)
+        };
+
+        await Should.ThrowAsync<ArgumentException>(() =>
+            provider.ExecuteBatchAsync(new[] { invalidOp }, TestContext.Current.CancellationToken));
+    }
 }

@@ -35,7 +35,7 @@ public sealed class EventEnvelope<T> : IEvent<T> where T : class
     public long Version { get; set; }
     public long Sequence { get; set; }
     public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
-    public string EventType { get; set; } = typeof(T).Name;
+    public string EventType { get; set; } = typeof(T).FullName ?? typeof(T).Name;
     public T Data { get; set; } = default!;
 
     object IEvent.Data => Data;

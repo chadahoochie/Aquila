@@ -6,6 +6,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
@@ -121,7 +122,7 @@ public sealed class CoreEventStore : IEventStore
         foreach (var @evt in events)
         {
             if (version > 0 && @evt.Version > version) break;
-            ApplyEventToAggregate(aggregate, @evt.Data);
+            ApplyEventToAggregate(aggregate, @evt);
         }
 
         return aggregate;
@@ -150,11 +151,13 @@ public sealed class CoreEventStore : IEventStore
             var streamIdProp = envelopeType.GetProperty("StreamId")!;
             var versionProp = envelopeType.GetProperty("Version")!;
             var sequenceProp = envelopeType.GetProperty("Sequence")!;
+            var eventTypeProp = envelopeType.GetProperty("EventType")!;
             var dataProp = envelopeType.GetProperty("Data")!;
             var tenantIdProp = envelopeType.GetProperty("TenantId")!;
 
             var newGuidCall = Expression.Call(typeof(Guid), nameof(Guid.NewGuid), Type.EmptyTypes);
             var castData = Expression.Convert(dataParam, t);
+            var eventTypeConst = Expression.Constant(t.FullName ?? t.Name);
 
             var block = Expression.Block(
                 new[] { envelopeVar },
@@ -163,6 +166,7 @@ public sealed class CoreEventStore : IEventStore
                 Expression.Call(envelopeVar, streamIdProp.SetMethod!, streamIdParam),
                 Expression.Call(envelopeVar, versionProp.SetMethod!, versionParam),
                 Expression.Call(envelopeVar, sequenceProp.SetMethod!, versionParam),
+                Expression.Call(envelopeVar, eventTypeProp.SetMethod!, eventTypeConst),
                 Expression.Call(envelopeVar, dataProp.SetMethod!, castData),
                 Expression.Call(envelopeVar, tenantIdProp.SetMethod!, tenantIdParam),
                 Expression.Convert(envelopeVar, typeof(IEvent))
@@ -177,8 +181,23 @@ public sealed class CoreEventStore : IEventStore
 
     private static void ApplyEventToAggregate(object aggregate, object eventData)
     {
-        var key = (aggregate.GetType(), eventData.GetType());
-        var invoker = _applyMethodCache.GetOrAdd(key, k =>
+        ArgumentNullException.ThrowIfNull(aggregate);
+        ArgumentNullException.ThrowIfNull(eventData);
+
+        string eventTypeName = string.Empty;
+        object payload = eventData;
+
+        if (eventData is IEvent ie)
+        {
+            eventTypeName = ie.EventType;
+            payload = ie.Data;
+        }
+
+        var aggType = aggregate.GetType();
+        var evtType = payload.GetType();
+
+        var directKey = (aggType, evtType);
+        var directInvoker = _applyMethodCache.GetOrAdd(directKey, k =>
         {
             var method = k.AggregateType.GetMethod("Apply", new[] { k.EventType });
             if (method == null) return null;
@@ -193,7 +212,46 @@ public sealed class CoreEventStore : IEventStore
             return Expression.Lambda<Action<object, object>>(call, aggParam, evtParam).Compile();
         });
 
-        invoker?.Invoke(aggregate, eventData);
+        if (directInvoker != null)
+        {
+            directInvoker.Invoke(aggregate, payload);
+            return;
+        }
+
+        var applyMethods = aggType.GetMethods()
+            .Where(m => m.Name == "Apply" && m.GetParameters().Length == 1)
+            .ToList();
+
+        foreach (var m in applyMethods)
+        {
+            var targetParamType = m.GetParameters()[0].ParameterType;
+            if (!string.IsNullOrEmpty(eventTypeName) &&
+                (targetParamType.Name == eventTypeName || targetParamType.FullName == eventTypeName || targetParamType.AssemblyQualifiedName == eventTypeName))
+            {
+                if (payload is Newtonsoft.Json.Linq.JObject jobj)
+                {
+                    var deserialized = jobj.ToObject(targetParamType);
+                    if (deserialized != null)
+                    {
+                        m.Invoke(aggregate, new[] { deserialized });
+                        return;
+                    }
+                }
+                else
+                {
+                    var json = payload.ToString();
+                    if (!string.IsNullOrEmpty(json))
+                    {
+                        var deserialized = JsonConvert.DeserializeObject(json, targetParamType);
+                        if (deserialized != null)
+                        {
+                            m.Invoke(aggregate, new[] { deserialized });
+                            return;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

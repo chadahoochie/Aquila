@@ -21,6 +21,18 @@ public static class ServiceCollectionExtensions
         return options;
     }
 
+    public static StoreOptions UseCosmos(this StoreOptions options, Microsoft.Azure.Cosmos.CosmosClient client, string databaseName = "AquilaDB", string containerName = "Documents")
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerName);
+
+        var provider = new CosmosStorageProvider(client, databaseName, containerName);
+        options.UseStorageProvider(provider);
+        return options;
+    }
+
     public static IServiceCollection AddAquila(this IServiceCollection services, Action<StoreOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);

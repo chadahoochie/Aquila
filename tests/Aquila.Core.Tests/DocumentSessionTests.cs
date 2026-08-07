@@ -257,12 +257,14 @@ public sealed class DocumentSessionTests
     }
 
     [Theory, AutoNSubstituteData]
-    public void Query_ThrowsNotSupportedException_ToPrevent_SyncOverAsync(
+    public void Query_Method_Throws_NotSupportedException(
         IAquilaStorageProvider storage)
     {
         var options = new StoreOptions { StorageProvider = storage };
         using var session = new DocumentSession(storage, options);
 
+#pragma warning disable CS0618
         Should.Throw<NotSupportedException>(() => session.Query<SampleDocument>());
+#pragma warning restore CS0618
     }
 }
