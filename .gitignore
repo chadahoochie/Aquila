@@ -1,0 +1,60 @@
+## Ignore Visual Studio / .NET Core / Rider build artifacts & temporary files
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[T]mp/
+[Tt]emp/
+
+# Visual Studio / Rider / VS Code cache & config
+.vs/
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build Results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+build/
+bld/
+[Bb]in/
+[Oo]bj/
+
+# Test Results & Coverage
+[Tt]est[Rr]esult*/
+[Aa]tifacts/
+coverage/
+*.coverage
+*.coveragexml
+
+# NuGet Packages & Cache
+*.nupkg
+*.snupkg
+**/packages/
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# OS generated files
+.DS_Store
+.DS_Store?
+ehthumbs.db
+Icon?
+Thumbs.db
