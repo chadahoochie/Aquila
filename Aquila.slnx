@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Aquila.Samples/Aquila.Samples.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Aquila.Core/Aquila.Core.csproj" />
+    <Project Path="src/Aquila.Cosmos/Aquila.Cosmos.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Aquila.Tests/Aquila.Tests.csproj" />
+  </Folder>
+</Solution>
