@@ -11,12 +11,14 @@ The Aquila repository (`Aquila.slnx`) is organized into modular assemblies desig
 ```
 Aquila/
 ├── src/
-│   ├── Aquila.Core/           # Core abstractions, sessions, engine, & in-memory SPI provider
-│   └── Aquila.Cosmos/         # Azure Cosmos DB storage SPI provider implementation & DI extensions
-├── samples/
-│   └── Aquila.Samples/        # Executable sample application showcasing store setup & projections
-└── tests/
-    └── Aquila.Tests/          # Unit & integration test suite (xUnit, NSubstitute, Shouldly, AutoFixture)
+│   ├── Aquila.Core/           # Core SPI abstractions, session engines, event store & projections
+│   └── Aquila.Cosmos/         # Azure Cosmos DB SPI storage provider & Cosmos event store
+├── tests/
+│   ├── Aquila.Core.Tests/     # Unit test suite for Aquila.Core (xUnit v3, NSubstitute, Shouldly)
+│   ├── Aquila.Cosmos.Tests/   # Unit test suite for Aquila.Cosmos (xUnit v3, NSubstitute, Shouldly)
+│   └── Aquila.Tests/          # Solution-wide integration test suite
+└── samples/
+    └── Aquila.Samples/        # Demo application showcasing pluggable storage & projections
 ```
 
 ### Project Responsibilities

@@ -7,6 +7,8 @@
     <Project Path="src/Aquila.Cosmos/Aquila.Cosmos.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Aquila.Core.Tests/Aquila.Core.Tests.csproj" />
+    <Project Path="tests/Aquila.Cosmos.Tests/Aquila.Cosmos.Tests.csproj" />
     <Project Path="tests/Aquila.Tests/Aquila.Tests.csproj" />
   </Folder>
 </Solution>

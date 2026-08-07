@@ -48,6 +48,8 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         _containerName = containerName;
     }
 
+    private Container Container => _container ??= _client.GetContainer(_databaseName, _containerName);
+
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         var db = await _client.CreateDatabaseIfNotExistsAsync(_databaseName, cancellationToken: ct);
@@ -64,7 +66,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
 
         try
         {
-            var response = await _container.ReadItemAsync<CosmosDocumentEnvelope<T>>(
+            var response = await Container.ReadItemAsync<CosmosDocumentEnvelope<T>>(
                 id,
                 new PartitionKey(partitionKey),
                 cancellationToken: ct);
@@ -94,7 +96,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         ArgumentNullException.ThrowIfNull(predicate);
 
         var docType = typeof(T).Name;
-        var query = _container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>()
+        var query = Container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>()
             .Where(x => x.DocType == docType && !x.IsDeleted);
 
         using var iterator = query.ToFeedIterator();
@@ -140,7 +142,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
             Data = envelope.Data
         };
 
-        await _container.UpsertItemAsync(cosmosEnvelope, new PartitionKey(envelope.PartitionKey), cancellationToken: ct);
+        await Container.UpsertItemAsync(cosmosEnvelope, new PartitionKey(envelope.PartitionKey), cancellationToken: ct);
     }
 
     public async Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class
@@ -148,7 +150,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
 
-        await _container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, new PartitionKey(partitionKey), cancellationToken: ct);
+        await Container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, new PartitionKey(partitionKey), cancellationToken: ct);
     }
 
     public async Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default)
@@ -162,11 +164,11 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
 
             if (op.OperationType == StorageOperationType.Upsert)
             {
-                await _container.UpsertItemAsync(op.Document, new PartitionKey(op.PartitionKey), cancellationToken: ct);
+                await Container.UpsertItemAsync(op.Document, new PartitionKey(op.PartitionKey), cancellationToken: ct);
             }
             else if (op.OperationType == StorageOperationType.Delete)
             {
-                await _container.DeleteItemAsync<object>(op.Id, new PartitionKey(op.PartitionKey), cancellationToken: ct);
+                await Container.DeleteItemAsync<object>(op.Id, new PartitionKey(op.PartitionKey), cancellationToken: ct);
             }
         }
     }
@@ -204,7 +206,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
                 Data = @evt
             };
 
-            await _container.UpsertItemAsync(doc, new PartitionKey(streamId), cancellationToken: ct);
+            await Container.UpsertItemAsync(doc, new PartitionKey(streamId), cancellationToken: ct);
         }
 
         var updatedHeader = new EventStreamHeader
@@ -227,7 +229,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
             Data = updatedHeader
         };
 
-        await _container.UpsertItemAsync(headerDoc, new PartitionKey(streamId), cancellationToken: ct);
+        await Container.UpsertItemAsync(headerDoc, new PartitionKey(streamId), cancellationToken: ct);
     }
 
     public async Task<IReadOnlyList<IEvent>> FetchEventsAsync(string streamId, string? tenantId = null, long fromVersion = 0, CancellationToken ct = default)
@@ -248,7 +250,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         }
 
         var events = new List<IEvent>();
-        using var iterator = _container.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
             queryDef, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(streamId) });
 
         while (iterator.HasMoreResults)
@@ -275,7 +277,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
 
         try
         {
-            var resp = await _container.ReadItemAsync<CosmosDocumentEnvelope<EventStreamHeader>>(
+            var resp = await Container.ReadItemAsync<CosmosDocumentEnvelope<EventStreamHeader>>(
                 $"$stream_{streamId}",
                 new PartitionKey(streamId),
                 cancellationToken: ct);

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Linq.Expressions;
+using Aquila.Core.Configuration;
 using Aquila.Core.Events;
 using Aquila.Core.Storage;
 
@@ -69,6 +70,7 @@ public interface IDocumentSession : IQuerySession
 /// </summary>
 public interface IDocumentStore : IDisposable, IAsyncDisposable
 {
+    StoreOptions Options { get; }
     Task InitializeAsync(CancellationToken ct = default);
     IQuerySession QuerySession(string? tenantId = null);
     IDocumentSession OpenSession(string? tenantId = null);
