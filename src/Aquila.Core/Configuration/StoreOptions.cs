@@ -1,13 +1,19 @@
-using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Linq.Expressions;
+using Aquila.Core.Events;
 using Aquila.Core.Projections;
 using Aquila.Core.Storage;
 
 namespace Aquila.Core.Configuration;
 
-public sealed class DocumentMapping<T> where T : class
+public sealed class DocumentMapping<T> : IDocumentMappingInfo where T : class
 {
+    public Type DocumentType => typeof(T);
+    public string DocTypeName => typeof(T).Name;
+    public bool SoftDeletesEnabled => UseSoftDeletes;
+
     private static readonly Func<T, string> DefaultIdSelector = CompileDefaultIdSelector();
 
     private static Func<T, string> CompileDefaultIdSelector()
@@ -34,6 +40,32 @@ public sealed class DocumentMapping<T> where T : class
         };
     }
 
+    public string IdentityPropertyName { get; private set; } = GetDefaultIdentityPropertyName();
+    public string PartitionKeyPropertyName { get; private set; } = string.Empty;
+
+    private static string GetDefaultIdentityPropertyName()
+    {
+        var prop = typeof(T).GetProperty("Id") ?? typeof(T).GetProperty("id");
+        return prop?.Name ?? "Id";
+    }
+
+    private static string? ExtractPropertyName(LambdaExpression expression)
+    {
+        if (expression == null) return null;
+        var body = expression.Body;
+        while (body is UnaryExpression unary && (unary.NodeType == ExpressionType.Convert || unary.NodeType == ExpressionType.ConvertChecked))
+        {
+            body = unary.Operand;
+        }
+
+        if (body is MemberExpression member)
+        {
+            return member.Member.Name;
+        }
+
+        return null;
+    }
+
     public Func<T, string> IdSelector { get; private set; } = DefaultIdSelector;
 
     public Func<T, string> PartitionKeySelector { get; private set; } = doc =>
@@ -48,6 +80,7 @@ public sealed class DocumentMapping<T> where T : class
     public DocumentMapping<T> Identity(Expression<Func<T, object>> idProperty)
     {
         ArgumentNullException.ThrowIfNull(idProperty);
+        IdentityPropertyName = ExtractPropertyName(idProperty) ?? "Id";
         var compiled = idProperty.Compile();
         IdSelector = doc =>
         {
@@ -60,6 +93,7 @@ public sealed class DocumentMapping<T> where T : class
     public DocumentMapping<T> PartitionKey(Expression<Func<T, object>> partitionKeyProperty)
     {
         ArgumentNullException.ThrowIfNull(partitionKeyProperty);
+        PartitionKeyPropertyName = ExtractPropertyName(partitionKeyProperty) ?? string.Empty;
         var compiled = partitionKeyProperty.Compile();
         PartitionKeySelector = doc =>
         {
@@ -86,6 +120,8 @@ public sealed class SchemaPolicy
 {
     private readonly Dictionary<Type, object> _mappings = new();
 
+    public IReadOnlyDictionary<Type, object> Mappings => _mappings;
+
     public DocumentMapping<T> For<T>() where T : class
     {
         if (!_mappings.TryGetValue(typeof(T), out var mapping))
@@ -101,16 +137,46 @@ public sealed class SchemaPolicy
 
 public sealed class ProjectionRegistration
 {
-    public List<IProjection> Projections { get; } = new();
+    private readonly List<IProjection> _projections = new();
+    private readonly ConcurrentDictionary<Type, IProjection?> _typeCache = new();
+
+    public List<IProjection> Projections => _projections;
 
     public void Add<TProjection>(ProjectionLifecycle lifecycle = ProjectionLifecycle.Inline) where TProjection : IProjection, new()
     {
         var projection = new TProjection();
-        if (projection is SingleStreamProjection<object> single)
-        {
-            single.Lifecycle = lifecycle;
-        }
-        Projections.Add(projection);
+        projection.Lifecycle = lifecycle;
+        Add(projection, lifecycle);
+    }
+
+    public void Add(IProjection projection, ProjectionLifecycle lifecycle = ProjectionLifecycle.Inline)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        projection.Lifecycle = lifecycle;
+        _projections.Add(projection);
+        _typeCache.Clear();
+    }
+
+    public IProjection? ForType(Type aggregateType)
+    {
+        ArgumentNullException.ThrowIfNull(aggregateType);
+        return _typeCache.GetOrAdd(aggregateType, t => _projections.FirstOrDefault(p => p.AggregateType == t));
+    }
+}
+
+public sealed class EventRegistration
+{
+    public UpcasterRegistry Upcasters { get; } = new();
+
+    public void RegisterUpcaster<TUpcaster>() where TUpcaster : IEventUpcaster, new()
+    {
+        Upcasters.Register<TUpcaster>();
+    }
+
+    public void RegisterUpcaster(IEventUpcaster upcaster)
+    {
+        ArgumentNullException.ThrowIfNull(upcaster);
+        Upcasters.Register(upcaster);
     }
 }
 
@@ -121,6 +187,7 @@ public sealed class StoreOptions
 
     public SchemaPolicy Schema { get; } = new();
     public ProjectionRegistration Projections { get; } = new();
+    public EventRegistration Events { get; } = new();
 
     public void UseStorageProvider(IAquilaStorageProvider provider)
     {

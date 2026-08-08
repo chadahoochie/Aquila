@@ -108,7 +108,7 @@ public sealed class InMemoryStorageProviderTests
             Data = new SampleDocument("doc-2", "Beta", 50m)
         }, TestContext.Current.CancellationToken);
 
-        var queried = await provider.QueryDocumentsAsync<SampleDocument>(x => x.Data.Price > 20m, TestContext.Current.CancellationToken);
+        var queried = await provider.QueryDocumentsAsync<SampleDocument>(x => x.Data.Price > 20m, null, TestContext.Current.CancellationToken);
         queried.Count.ShouldBe(1);
         queried[0].Data.Title.ShouldBe("Beta");
     }
