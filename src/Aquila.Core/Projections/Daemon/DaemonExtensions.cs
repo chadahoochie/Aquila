@@ -1,8 +1,9 @@
-using System;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Storage;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Aquila.Core.Projections.Daemon;
 
@@ -41,8 +42,8 @@ public static class DaemonExtensions
         services.TryAddSingleton<ProjectionDaemon>(sp =>
         {
             var checkpointStore = sp.GetRequiredService<IProjectionCheckpointStore>();
-            var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<ProjectionDaemon>>();
-            var docStore = sp.GetService<Aquila.Core.Abstractions.IDocumentStore>();
+            var logger = sp.GetService<ILogger<ProjectionDaemon>>();
+            var docStore = sp.GetService<IDocumentStore>();
             if (docStore != null)
             {
                 return new ProjectionDaemon(docStore, checkpointStore, logger);

@@ -86,7 +86,7 @@ public class Program
         services.AddAquila(options =>
         {
             options.UseInMemoryStorage();
-            
+
             options.Schema.For<Customer>()
                 .Identity(c => c.Id)
                 .PartitionKey(c => c.Name);

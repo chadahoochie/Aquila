@@ -21,10 +21,10 @@ public sealed class DocumentMapping<T> : IDocumentMappingInfo where T : class
         var prop = typeof(T).GetProperty("Id") ?? typeof(T).GetProperty("id");
         if (prop != null && prop.CanRead)
         {
-            var param = System.Linq.Expressions.Expression.Parameter(typeof(T), "doc");
-            var propExpr = System.Linq.Expressions.Expression.Property(param, prop);
-            var toStringCall = System.Linq.Expressions.Expression.Call(propExpr, typeof(object).GetMethod("ToString")!);
-            var lambda = System.Linq.Expressions.Expression.Lambda<Func<T, string>>(toStringCall, param);
+            var param = Expression.Parameter(typeof(T), "doc");
+            var propExpr = Expression.Property(param, prop);
+            var toStringCall = Expression.Call(propExpr, typeof(object).GetMethod("ToString")!);
+            var lambda = Expression.Lambda<Func<T, string>>(toStringCall, param);
             var compiled = lambda.Compile();
             return doc =>
             {

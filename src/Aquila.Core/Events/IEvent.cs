@@ -1,4 +1,8 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq.Expressions;
 
 namespace Aquila.Core.Events;
 
@@ -30,9 +34,9 @@ public interface IEvent<out T> : IEvent where T : class
 }
 
 /// <summary>
-/// Default implementation of IEvent.
+/// Default implementation of an event envelope.
 /// </summary>
-public sealed class EventEnvelope<T> : IEvent<T> where T : class
+public class EventEnvelope<T> : IEvent<T> where T : class
 {
     private IReadOnlyDictionary<string, object>? _headers;
 
@@ -51,7 +55,7 @@ public sealed class EventEnvelope<T> : IEvent<T> where T : class
     public string? CausationId { get; set; }
     public IReadOnlyDictionary<string, object> Headers
     {
-        get => _headers ?? System.Collections.ObjectModel.ReadOnlyDictionary<string, object>.Empty;
+        get => _headers ?? ReadOnlyDictionary<string, object>.Empty;
         set => _headers = value;
     }
 }
@@ -61,7 +65,7 @@ public sealed class EventEnvelope<T> : IEvent<T> where T : class
 /// </summary>
 public static class EventExtensions
 {
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Action<IEvent, long>> _globalSequenceSetters = new();
+    private static readonly ConcurrentDictionary<Type, Action<IEvent, long>> _globalSequenceSetters = new();
 
     public static void SetGlobalSequence(this IEvent evt, long globalSequence)
     {
@@ -71,11 +75,11 @@ public static class EventExtensions
             var prop = t.GetProperty(nameof(IEvent.GlobalSequence));
             if (prop != null && prop.CanWrite && prop.SetMethod != null)
             {
-                var instanceParam = System.Linq.Expressions.Expression.Parameter(typeof(IEvent), "evt");
-                var valueParam = System.Linq.Expressions.Expression.Parameter(typeof(long), "val");
-                var castInstance = System.Linq.Expressions.Expression.Convert(instanceParam, t);
-                var call = System.Linq.Expressions.Expression.Call(castInstance, prop.SetMethod, valueParam);
-                return System.Linq.Expressions.Expression.Lambda<Action<IEvent, long>>(call, instanceParam, valueParam).Compile();
+                var instanceParam = Expression.Parameter(typeof(IEvent), "evt");
+                var valueParam = Expression.Parameter(typeof(long), "val");
+                var castInstance = Expression.Convert(instanceParam, t);
+                var call = Expression.Call(castInstance, prop.SetMethod, valueParam);
+                return Expression.Lambda<Action<IEvent, long>>(call, instanceParam, valueParam).Compile();
             }
             return (_, _) => { };
         });
