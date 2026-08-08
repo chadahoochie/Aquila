@@ -93,7 +93,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
         var param = System.Linq.Expressions.Expression.Parameter(envelopeType, "env");
         var lambda = System.Linq.Expressions.Expression.Lambda(System.Linq.Expressions.Expression.Constant(true), param);
 
-        var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.StorageProvider.Documents, new object[] { lambda, ct })!;
+        var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.StorageProvider.Documents, new object?[] { lambda, null, ct })!;
         await queryTask.ConfigureAwait(false);
 
         var resultProperty = queryTask.GetType().GetProperty("Result")!;

@@ -94,7 +94,7 @@ public sealed class DocumentSessionTests
             new DocumentEnvelope<SampleDocument> { Id = doc2.Id, PartitionKey = nameof(SampleDocument), DocType = nameof(SampleDocument), Data = doc2 }
         };
 
-        docStorage.QueryDocumentsAsync<SampleDocument>(Arg.Any<System.Linq.Expressions.Expression<Func<DocumentEnvelope<SampleDocument>, bool>>>(), Arg.Any<CancellationToken>())
+        docStorage.QueryDocumentsAsync<SampleDocument>(Arg.Any<System.Linq.Expressions.Expression<Func<DocumentEnvelope<SampleDocument>, bool>>>(), Arg.Any<QueryOptions>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<DocumentEnvelope<SampleDocument>>>(envelopes));
 
         using var session = new DocumentSession(storage, options);

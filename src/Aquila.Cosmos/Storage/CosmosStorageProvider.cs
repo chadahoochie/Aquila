@@ -74,17 +74,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
 
             if (response.Resource == null || response.Resource.IsDeleted) return null;
 
-            return new DocumentEnvelope<T>
-            {
-                Id = response.Resource.Id,
-                PartitionKey = response.Resource.PartitionKey,
-                DocType = response.Resource.DocType,
-                TenantId = response.Resource.TenantId,
-                IsDeleted = response.Resource.IsDeleted,
-                Version = response.Resource.Version,
-                ETag = response.Resource.ETag,
-                Data = response.Resource.Data
-            };
+            return MapToEnvelope(response.Resource);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
@@ -92,39 +82,78 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         }
     }
 
-    public async Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>> predicate, CancellationToken ct = default) where T : class
+    public async Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        QueryOptions? options = null,
+        CancellationToken ct = default) where T : class
     {
-        ArgumentNullException.ThrowIfNull(predicate);
+        var requestOptions = new QueryRequestOptions();
+        if (options != null)
+        {
+            if (!string.IsNullOrEmpty(options.PartitionKey))
+            {
+                requestOptions.PartitionKey = new PartitionKey(options.PartitionKey);
+            }
+            if (options.MaxItemCount.HasValue)
+            {
+                requestOptions.MaxItemCount = options.MaxItemCount.Value;
+            }
+        }
 
         var docType = typeof(T).Name;
-        var queryDef = new QueryDefinition("SELECT * FROM c WHERE c._docType = @docType AND c._isDeleted = false")
-            .WithParameter("@docType", docType);
+        IQueryable<CosmosDocumentEnvelope<T>>? queryable = Container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>(
+            false,
+            options?.ContinuationToken,
+            requestOptions);
 
-        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(queryDef);
-        var results = new List<DocumentEnvelope<T>>();
-        var compiledPredicate = predicate.Compile();
-
-        while (iterator.HasMoreResults)
+        if (queryable == null || queryable.Provider == null)
         {
-            var response = await iterator.ReadNextAsync(ct);
-            foreach (var item in response)
-            {
-                var envelope = new DocumentEnvelope<T>
-                {
-                    Id = item.Id,
-                    PartitionKey = item.PartitionKey,
-                    DocType = item.DocType,
-                    TenantId = item.TenantId,
-                    IsDeleted = item.IsDeleted,
-                    Version = item.Version,
-                    ETag = item.ETag,
-                    Data = item.Data
-                };
+            return Array.Empty<DocumentEnvelope<T>>();
+        }
 
-                if (compiledPredicate(envelope))
+        queryable = queryable.Where(x => x.DocType == docType && !x.IsDeleted);
+
+        if (predicate != null)
+        {
+            var rewritten = CosmosExpressionRewriter.Rewrite(predicate);
+            if (rewritten != null)
+            {
+                queryable = queryable.Where(rewritten);
+            }
+        }
+
+        var results = new List<DocumentEnvelope<T>>();
+
+        try
+        {
+            var queryDef = queryable.ToQueryDefinition();
+            var sql = queryDef.QueryText;
+
+            if (sql.StartsWith("SELECT VALUE root FROM root"))
+            {
+                sql = "SELECT * FROM c" + sql.Substring("SELECT VALUE root FROM root".Length);
+                queryDef = new QueryDefinition(sql);
+            }
+
+            using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
+                queryDef,
+                continuationToken: options?.ContinuationToken,
+                requestOptions: requestOptions);
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync(ct);
+                foreach (var item in response)
                 {
-                    results.Add(envelope);
+                    results.Add(MapToEnvelope(item));
                 }
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException || ex is ArgumentOutOfRangeException || ex is ArgumentException)
+        {
+            foreach (var item in queryable)
+            {
+                results.Add(MapToEnvelope(item));
             }
         }
 
@@ -411,6 +440,21 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         {
             return (null, 0);
         }
+    }
+
+    private static DocumentEnvelope<T> MapToEnvelope<T>(CosmosDocumentEnvelope<T> item)
+    {
+        return new DocumentEnvelope<T>
+        {
+            Id = item.Id,
+            PartitionKey = item.PartitionKey,
+            DocType = item.DocType,
+            TenantId = item.TenantId,
+            IsDeleted = item.IsDeleted,
+            Version = item.Version,
+            ETag = item.ETag,
+            Data = item.Data
+        };
     }
 
     public void Dispose() => _client?.Dispose();

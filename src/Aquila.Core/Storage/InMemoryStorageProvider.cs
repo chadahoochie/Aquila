@@ -41,17 +41,32 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
         return Task.FromResult<DocumentEnvelope<T>?>(null);
     }
 
-    public Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>> predicate, CancellationToken ct = default) where T : class
+    public Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        QueryOptions? options = null,
+        CancellationToken ct = default) where T : class
     {
-        ArgumentNullException.ThrowIfNull(predicate);
-
-        var compiled = predicate.Compile();
-        var results = _documents.Values
+        IEnumerable<DocumentEnvelope<T>> query = _documents.Values
             .OfType<DocumentEnvelope<T>>()
-            .Where(compiled)
-            .ToList();
+            .Where(env => !env.IsDeleted);
 
-        return Task.FromResult<IReadOnlyList<DocumentEnvelope<T>>>(results);
+        if (!string.IsNullOrEmpty(options?.PartitionKey))
+        {
+            query = query.Where(env => env.PartitionKey == options.PartitionKey);
+        }
+
+        if (predicate != null)
+        {
+            var compiled = predicate.Compile();
+            query = query.Where(compiled);
+        }
+
+        if (options != null && options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0)
+        {
+            query = query.Take(options.MaxItemCount.Value);
+        }
+
+        return Task.FromResult<IReadOnlyList<DocumentEnvelope<T>>>(query.ToList());
     }
 
     public Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class

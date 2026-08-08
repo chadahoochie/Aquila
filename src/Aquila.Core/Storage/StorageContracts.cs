@@ -67,12 +67,22 @@ public sealed class StorageOperation
 }
 
 /// <summary>
+/// Options for configuring document queries.
+/// </summary>
+public sealed class QueryOptions
+{
+    public string? PartitionKey { get; set; }
+    public int? MaxItemCount { get; set; }
+    public string? ContinuationToken { get; set; }
+}
+
+/// <summary>
 /// Provider interface for underlying document database persistence.
 /// </summary>
 public interface IDocumentStorageProvider
 {
     Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
-    Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>> predicate, CancellationToken ct = default) where T : class;
+    Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class;
     Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class;
     Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
     Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default);

@@ -421,7 +421,8 @@ public abstract class QuerySessionBase : IQuerySession
             var docType = typeof(T).Name;
 
             var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
-                x => x.DocType == docType && !x.IsDeleted && x.TenantId == TenantId && idSet.Contains(x.Id),
+                x => x.TenantId == TenantId && idSet.Contains(x.Id),
+                null,
                 ct);
 
             foreach (var envelope in envelopes)
@@ -447,16 +448,11 @@ public abstract class QuerySessionBase : IQuerySession
 
     public async Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class
     {
-        var docType = typeof(T).Name;
-        var compiled = predicate?.Compile();
-        var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
-            x => x.DocType == docType && !x.IsDeleted && x.TenantId == TenantId,
-            ct);
-
-        var matchingEnvelopes = compiled != null ? envelopes.Where(compiled) : envelopes;
+        var fullPredicate = CombineWithTenantId(predicate);
+        var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(fullPredicate, null, ct);
         var results = new List<T>();
 
-        foreach (var envelope in matchingEnvelopes)
+        foreach (var envelope in envelopes)
         {
             if (TrackingMode != TrackingMode.Lightweight && InnerIdentityMap.TryGet<T>(envelope.Id, out var cached))
             {
@@ -475,6 +471,42 @@ public abstract class QuerySessionBase : IQuerySession
         }
 
         return results;
+    }
+
+    private Expression<Func<DocumentEnvelope<T>, bool>> CombineWithTenantId<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate)
+    {
+        var param = Expression.Parameter(typeof(DocumentEnvelope<T>), "x");
+        var tenantCheck = Expression.Equal(
+            Expression.Property(param, nameof(DocumentEnvelope<T>.TenantId)),
+            Expression.Constant(TenantId));
+
+        if (predicate == null)
+        {
+            return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(tenantCheck, param);
+        }
+
+        var visitor = new ParameterReplaceVisitor(predicate.Parameters[0], param);
+        var rewrittenBody = visitor.Visit(predicate.Body);
+
+        var combined = Expression.AndAlso(tenantCheck, rewrittenBody);
+        return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(combined, param);
+    }
+
+    private sealed class ParameterReplaceVisitor : ExpressionVisitor
+    {
+        private readonly ParameterExpression _from;
+        private readonly ParameterExpression _to;
+
+        public ParameterReplaceVisitor(ParameterExpression from, ParameterExpression to)
+        {
+            _from = from;
+            _to = to;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            return node == _from ? _to : base.VisitParameter(node);
+        }
     }
 
     public async Task<TResult> QueryAsync<TDoc, TResult>(ICompiledQuery<TDoc, TResult> query, CancellationToken ct = default) where TDoc : class
