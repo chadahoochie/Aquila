@@ -206,7 +206,29 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
             {
                 await Container.DeleteItemAsync<object>(op.Id, new PartitionKey(op.PartitionKey), cancellationToken: ct);
             }
+            else if (op.OperationType == StorageOperationType.Patch)
+            {
+                if (op.PatchOperations == null || op.PatchOperations.Count == 0)
+                {
+                    continue;
+                }
+
+                var cosmosPatchOperations = op.PatchOperations.Select(BuildCosmosPatchOperation).ToList();
+                await Container.PatchItemAsync<CosmosDocumentEnvelope<object>>(op.Id, new PartitionKey(op.PartitionKey), cosmosPatchOperations, cancellationToken: ct);
+            }
         }
+    }
+
+    private static PatchOperation BuildCosmosPatchOperation(PatchOperationData patchData)
+    {
+        return patchData.Action switch
+        {
+            PatchAction.Set => PatchOperation.Replace(patchData.Path, patchData.Value),
+            PatchAction.Increment => PatchOperation.Increment(patchData.Path, Convert.ToInt64(patchData.Value)),
+            PatchAction.Remove => PatchOperation.Remove(patchData.Path),
+            PatchAction.Append => PatchOperation.Add($"{patchData.Path}/-", patchData.Value),
+            _ => throw new NotSupportedException($"Patch action '{patchData.Action}' is not supported.")
+        };
     }
 
     // --- EventStorageProvider ---
