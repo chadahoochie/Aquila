@@ -256,3 +256,250 @@ var customer = await betaSession.LoadAsync<Customer>("C-1"); // Returns null
 ### Tenant Isolation in Event Store
 
 Event streams, event envelopes, and stream headers track the `TenantId`. Appending or fetching streams inside a tenant-scoped session guarantees events are isolated from other tenants.
+
+---
+
+## 7. Session Tracking Modes
+
+Every session — query or document — operates under a [`TrackingMode`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Sessions/TrackingMode.cs) that governs identity-map caching and dirty-checking behavior. Choose the mode based on the read/write pattern of the unit of work.
+
+| Mode | Identity Map | Dirty Checking | Typical Use |
+| :--- | :--- | :--- | :--- |
+| `TrackingMode.Lightweight` | Disabled | None | High-throughput read-only queries or one-off writes where tracking overhead is unnecessary. `Store()` still queues a write, but repeated `LoadAsync` calls always re-fetch from storage. |
+| `TrackingMode.IdentityMap` | Enabled | None | Ensures the same logical document returns the same CLR instance within a session, but requires explicit `Store()` calls to persist mutations. |
+| `TrackingMode.DirtyTracking` (default) | Enabled | Automatic (JSON snapshot diff) | Load-mutate-`SaveChangesAsync()` workflows. Every loaded/tracked document is snapshotted; on `SaveChangesAsync()`, Aquila re-serializes tracked entities and diffs the bytes to auto-queue changed documents without an explicit `Store()` call. |
+
+```csharp
+using Aquila.Core.Sessions;
+
+// Explicit tracking mode selection
+using var session = store.OpenSession(TrackingMode.DirtyTracking);
+
+var customer = await session.LoadAsync<Customer>("C-1");
+customer!.Email = "updated@example.com"; // Mutate the tracked instance directly
+
+// No explicit Store() call needed — DirtyTracking detects the change via snapshot diff
+await session.SaveChangesAsync();
+
+// Lightweight sessions skip identity map and dirty-checking overhead entirely
+using var lightweight = store.LightweightSession();
+var readOnly = await lightweight.LoadAsync<Customer>("C-1");
+```
+
+Dirty checking is implemented in [`DocumentSession.DetectAndQueueDirtyEntities`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Sessions/DocumentSession.cs#L305), which walks all entities tracked in the [`IIdentityMap`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Sessions/IIdentityMap.cs), re-serializes each with `System.Text.Json`, and compares the resulting UTF-8 bytes against the snapshot recorded at load/store time.
+
+---
+
+## 8. Partial Document Patching
+
+For high-frequency, low-payload mutations (counters, status flags, list append/remove), Aquila exposes a fluent [`IPatchExpression<T>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Patching/IPatchExpression.cs) API that translates property-lambda expressions into JSON-pointer paths, avoiding full document read-modify-write round-trips.
+
+```csharp
+using var session = store.OpenSession();
+
+session.Patch<Order>(id: "ORD-1001", partitionKey: "Electronics")
+    .Set(o => o.Status, "Shipped")
+    .Increment(o => o.RevisionNumber)          // defaults to +1
+    .Append(o => o.Tags, "expedited")
+    .Remove(o => o.Tags, "backorder");
+
+await session.SaveChangesAsync();
+```
+
+### Supported Patch Operations
+
+| Method | Behavior |
+| :--- | :--- |
+| `Set(property, value)` | Replaces the property value at the resolved JSON pointer path. |
+| `Increment(property, value = 1)` | Atomically increments a numeric property. On Cosmos DB this maps to `PatchOperation.Increment`, executed server-side. |
+| `Append(property, element)` | Appends an element to a collection property (`PatchOperation.Add` at the `/-` array-tail index on Cosmos). |
+| `Remove(property, element)` | Removes a matching element from a collection property. |
+
+Patch paths are resolved by walking the property-access lambda into a `/Data/PropertyName[/NestedProperty...]` JSON pointer (see [`PatchExpression<T>.BuildJsonPointerPath`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Patching/PatchExpression.cs#L68)). `Patch<T>()` queues a `StorageOperationType.Patch` [`StorageOperation`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L59) that is flushed by `ExecuteBatchAsync` on `SaveChangesAsync()`, alongside upserts and deletes in the same batch. The [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs#L122) applies patches via reflection for local testing parity with Cosmos DB semantics.
+
+---
+
+## 9. Multi-Stream Projections
+
+Where [`SingleStreamProjection<TAggregate>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/SingleStreamProjection.cs) folds events from exactly one stream into a document keyed by that stream's ID, [`MultiStreamProjection<TDoc, TId>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/MultiStreamProjection.cs) builds read models that aggregate events from *many* streams into a differently-keyed read model — e.g. a per-customer order history document fed by events from many individual order streams.
+
+```csharp
+using Aquila.Core.Events;
+using Aquila.Core.Projections;
+
+public class CustomerOrderHistory
+{
+    public string CustomerId { get; set; } = string.Empty;
+    public int OrderCount { get; set; }
+    public decimal LifetimeValue { get; set; }
+}
+
+public class CustomerOrderHistoryProjection : MultiStreamProjection<CustomerOrderHistory, string>
+{
+    // Route each event to the read-model document ID it belongs to.
+    protected override string Identity(IEvent @event) =>
+        @event.Data switch
+        {
+            OrderPlaced e => e.CustomerId,
+            _ => string.Empty
+        };
+
+    // Return false to delete the read model instead of upserting it.
+    public override bool Apply(IEvent @event, CustomerOrderHistory document)
+    {
+        if (@event.Data is OrderPlaced placed)
+        {
+            document.CustomerId = placed.CustomerId;
+            document.OrderCount++;
+            document.LifetimeValue += placed.TotalAmount;
+        }
+        return true;
+    }
+}
+
+options.Projections.Add<CustomerOrderHistoryProjection>(ProjectionLifecycle.Inline);
+```
+
+`Identity(@event)` determines which read-model document instance the event applies to; `Apply(@event, document)` mutates it. Returning `false` from `Apply` causes the projection runner to delete the read-model document instead of upserting it — useful for cross-stream cleanup (e.g. an `OrderCancelled` event removing a summary row). Multi-stream projections can run under any `ProjectionLifecycle`, including `Inline` (processed synchronously in `SaveChangesAsync`) and `Async` (processed by the projection daemon — see §10).
+
+---
+
+## 10. Asynchronous Projections & the Projection Daemon
+
+`ProjectionLifecycle.Async` projections do not run inline inside `SaveChangesAsync()`. Instead, a background [`IProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/IProjectionDaemon.cs) hosted service polls the event store's global sequence and dispatches new event batches to registered async projections, tracking progress via a durable [`IProjectionCheckpointStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/IProjectionCheckpointStore.cs).
+
+### Registering the Daemon
+
+```csharp
+using Aquila.Core.Projections.Daemon;
+using Aquila.Cosmos.Extensions; // for AddCosmosDaemon when using Cosmos
+
+builder.Services.AddAquila(options =>
+{
+    options.UseCosmos(connectionString, "ProductionDB", "AquilaDocuments");
+    options.Projections.Add<CustomerOrderHistoryProjection>(ProjectionLifecycle.Async);
+});
+
+// InMemory / generic storage-backed polling daemon
+builder.Services.AddAquilaDaemon();
+
+// -- or, for Cosmos DB, the change-feed-aware daemon variant --
+builder.Services.AddCosmosDaemon();
+```
+
+`AddAquilaDaemon()` registers [`ProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/ProjectionDaemon.cs) as a `BackgroundService` that continuously polls `IEventStorageProvider.FetchGlobalEventsAsync` in 100-event batches. `AddCosmosDaemon()` registers [`CosmosProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs), which additionally exposes `ProcessChangeFeedBatchAsync` for wiring into an Azure Cosmos DB Change Feed Processor, deserializing `$event`-tagged change feed items directly instead of re-polling.
+
+By default, `IProjectionCheckpointStore` durably persists each projection's `LastCompletedSequence` as a document via [`DocumentStorageProjectionCheckpointStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/IProjectionCheckpointStore.cs#L21). Pass a custom factory to `AddAquilaDaemon(checkpointStoreFactory)` to use `InMemoryProjectionCheckpointStore` (testing only — checkpoints do not survive process restarts) or a bespoke store.
+
+### Daemon Operations
+
+```csharp
+var daemon = serviceProvider.GetRequiredService<IProjectionDaemon>();
+
+// Pause / resume a specific async projection without stopping the whole daemon
+await daemon.StopProjectionAsync(nameof(CustomerOrderHistoryProjection));
+await daemon.StartProjectionAsync(nameof(CustomerOrderHistoryProjection));
+
+// Block until all active async projections have caught up to the current global sequence
+await daemon.CatchUpAsync();
+
+// Zero-Downtime Rebuild: delete existing read-model documents, reset the checkpoint to 0,
+// and replay the entire event history from the beginning.
+await daemon.RebuildProjectionAsync<CustomerOrderHistoryProjection>();
+```
+
+`RebuildProjectionAsync` is the mechanism for the "drop and replay" pattern described in [ARCHITECTURE.md](ARCHITECTURE.md): it deletes every document of the projection's read-model type, resets the checkpoint to sequence `0`, and reprocesses the full event history. Use this after a breaking read-model schema change instead of mutating documents in place.
+
+---
+
+## 11. Event Upcasting (Schema Evolution)
+
+As event-carrying types evolve, Aquila supports transforming old event payload shapes into new ones transparently at read time via [`IEventUpcaster`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/IEventUpcaster.cs), without rewriting historical events in the journal.
+
+```csharp
+using Aquila.Core.Events;
+
+// V1 event shape (retained for historical deserialization only)
+public record CustomerRegisteredV1(string CustomerId, string FullName);
+
+// V2 event shape — FullName split into structured parts
+public record CustomerRegistered(string CustomerId, string FirstName, string LastName);
+
+public class CustomerRegisteredUpcaster : EventUpcaster<CustomerRegisteredV1, CustomerRegistered>
+{
+    public override CustomerRegistered Upcast(CustomerRegisteredV1 oldEvent)
+    {
+        var parts = oldEvent.FullName.Split(' ', 2);
+        return new CustomerRegistered(oldEvent.CustomerId, parts[0], parts.Length > 1 ? parts[1] : string.Empty);
+    }
+}
+
+// Registration
+options.Events.RegisterUpcaster<CustomerRegisteredUpcaster>();
+```
+
+Upcasters are chained: [`UpcasterRegistry.Upcast`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/UpcasterRegistry.cs#L25) repeatedly applies matching upcasters (keyed by `SourceType`) until no further upcaster matches the current payload type, so `V1 → V2 → V3` migrations compose automatically as long as each step is registered. Upcasting happens transparently inside `FetchStreamAsync` and `FetchGlobalEventsAsync` on [`CoreEventStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Sessions/QuerySession.cs) — application code, aggregates, and projections only ever see the latest event shape.
+
+---
+
+## 12. Aggregate Snapshots
+
+For long-lived streams, replaying every event on every rehydration becomes expensive. Aquila's [`ISnapshotStrategy<TAggregate>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/ISnapshotStrategy.cs) and the `IEventStorageProvider.SaveSnapshotAsync` / `GetSnapshotAsync` SPI methods let storage providers persist a point-in-time aggregate snapshot alongside the raw event stream.
+
+```csharp
+using Aquila.Core.Events;
+
+// Snapshot every 50 events instead of the default 100
+var strategy = new DefaultSnapshotStrategy<OrderAggregate>(threshold: 50);
+
+// Persist manually once you've decided a snapshot is warranted
+await storageProvider.Events.SaveSnapshotAsync(streamId, version: 50, aggregate);
+```
+
+`AggregateStreamAsync<TAggregate>` automatically checks for an existing snapshot via `GetSnapshotAsync` before replaying: if a snapshot exists at or below the requested target version, Aquila rehydrates from the snapshot and only replays events *after* the snapshot's version, rather than the whole stream from version `0`. Both [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs#L386) and [`CosmosStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs#L418) implement snapshot persistence — on Cosmos DB, a snapshot is stored as a `$snapshot_{streamId}` document in the same partition as the stream's events.
+
+`ISnapshotStrategy<TAggregate>.ShouldSnapshot(currentVersion, eventsSinceLastSnapshot)` is a policy hook for callers that want to decide *when* to snapshot (e.g. from an application-level background job); Aquila does not currently invoke it automatically during `SaveChangesAsync` — snapshot writes are an explicit, opt-in operation.
+
+---
+
+## 13. Compiled Queries
+
+For query shapes that are executed repeatedly with different parameter values (e.g. "find active customers in region X"), [`ICompiledQuery<TDoc, TResult>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Queries/ICompiledQuery.cs) lets you define a reusable, parameterized LINQ query once and have its expression tree compiled and cached on first use.
+
+```csharp
+using System.Linq;
+using Aquila.Core.Queries;
+
+public class CustomersByRegion : ICompiledQuery<Customer, IQueryable<Customer>>
+{
+    public string Region { get; }
+    public CustomersByRegion(string region) => Region = region;
+
+    public Expression<Func<IQueryable<Customer>, IQueryable<Customer>>> QueryIs() =>
+        customers => customers.Where(c => c.Region == Region);
+}
+
+// Usage
+var eastCoast = await session.QueryAsync(new CustomersByRegion("US-East"));
+```
+
+`IQuerySession.QueryAsync<TDoc, TResult>(ICompiledQuery<TDoc, TResult> query)` loads all documents of type `TDoc` for the session's tenant, then executes the query via [`CompiledQueryCache.Execute`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Queries/CompiledQueryCache.cs). The first execution of a given `ICompiledQuery` type compiles its `QueryIs()` expression into a cached delegate keyed by the query's `Type`; a `QueryParameterBindingVisitor` rewrites closed-over instance-field/property references (like `Region` above) into a parameter so the *compiled delegate* is reused across instances with different parameter values — only the LINQ compilation cost is paid once per query type, not once per call.
+
+---
+
+## 14. Correlation, Causation & Custom Headers
+
+Sessions carry optional `CorrelationId`, `CausationId`, and an arbitrary `Headers` bag that are propagated onto every event envelope appended during that session — useful for distributed tracing and audit trails across event-driven workflows.
+
+```csharp
+using var session = store.OpenSession();
+
+session.CorrelationId = httpContext.TraceIdentifier;
+session.CausationId = incomingCommandId;
+session.SetHeader("initiated-by", "billing-service");
+
+session.Events.Append(streamId, new PaymentProcessed(streamId, 150.00m));
+await session.SaveChangesAsync();
+```
+
+Each appended [`IEvent`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/IEvent.cs) envelope inherits the session's `CorrelationId`/`CausationId`/`Headers` at the moment of `Append`/`StartStream` (see [`CoreEventStore.ApplyHeaders`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Sessions/QuerySession.cs#L120)), falling back to values already present on the source event object (e.g. from a prior upcast) when the session does not set its own.
