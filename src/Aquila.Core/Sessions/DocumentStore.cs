@@ -8,11 +8,13 @@ namespace Aquila.Core.Sessions;
 public sealed class DocumentStore : IDocumentStore
 {
     public StoreOptions Options { get; }
+    public IStoreMetadata Metadata { get; }
 
     public DocumentStore(StoreOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         Options = options;
+        Metadata = new StoreMetadata(options);
     }
 
     public async Task InitializeAsync(System.Threading.CancellationToken ct = default)

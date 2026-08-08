@@ -85,6 +85,7 @@ public interface IDocumentSession : IQuerySession
 public interface IDocumentStore : IDisposable, IAsyncDisposable
 {
     StoreOptions Options { get; }
+    IStoreMetadata Metadata { get; }
     Task InitializeAsync(CancellationToken ct = default);
     IQuerySession QuerySession(string? tenantId = null);
     IDocumentSession OpenSession(TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null);

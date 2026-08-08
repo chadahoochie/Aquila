@@ -8,8 +8,12 @@ using Aquila.Core.Storage;
 
 namespace Aquila.Core.Configuration;
 
-public sealed class DocumentMapping<T> where T : class
+public sealed class DocumentMapping<T> : IDocumentMappingInfo where T : class
 {
+    public Type DocumentType => typeof(T);
+    public string DocTypeName => typeof(T).Name;
+    public bool SoftDeletesEnabled => UseSoftDeletes;
+
     private static readonly Func<T, string> DefaultIdSelector = CompileDefaultIdSelector();
 
     private static Func<T, string> CompileDefaultIdSelector()
@@ -36,6 +40,32 @@ public sealed class DocumentMapping<T> where T : class
         };
     }
 
+    public string IdentityPropertyName { get; private set; } = GetDefaultIdentityPropertyName();
+    public string PartitionKeyPropertyName { get; private set; } = string.Empty;
+
+    private static string GetDefaultIdentityPropertyName()
+    {
+        var prop = typeof(T).GetProperty("Id") ?? typeof(T).GetProperty("id");
+        return prop?.Name ?? "Id";
+    }
+
+    private static string? ExtractPropertyName(LambdaExpression expression)
+    {
+        if (expression == null) return null;
+        var body = expression.Body;
+        while (body is UnaryExpression unary && (unary.NodeType == ExpressionType.Convert || unary.NodeType == ExpressionType.ConvertChecked))
+        {
+            body = unary.Operand;
+        }
+
+        if (body is MemberExpression member)
+        {
+            return member.Member.Name;
+        }
+
+        return null;
+    }
+
     public Func<T, string> IdSelector { get; private set; } = DefaultIdSelector;
 
     public Func<T, string> PartitionKeySelector { get; private set; } = doc =>
@@ -50,6 +80,7 @@ public sealed class DocumentMapping<T> where T : class
     public DocumentMapping<T> Identity(Expression<Func<T, object>> idProperty)
     {
         ArgumentNullException.ThrowIfNull(idProperty);
+        IdentityPropertyName = ExtractPropertyName(idProperty) ?? "Id";
         var compiled = idProperty.Compile();
         IdSelector = doc =>
         {
@@ -62,6 +93,7 @@ public sealed class DocumentMapping<T> where T : class
     public DocumentMapping<T> PartitionKey(Expression<Func<T, object>> partitionKeyProperty)
     {
         ArgumentNullException.ThrowIfNull(partitionKeyProperty);
+        PartitionKeyPropertyName = ExtractPropertyName(partitionKeyProperty) ?? string.Empty;
         var compiled = partitionKeyProperty.Compile();
         PartitionKeySelector = doc =>
         {
@@ -87,6 +119,8 @@ public sealed class DocumentMapping<T> where T : class
 public sealed class SchemaPolicy
 {
     private readonly Dictionary<Type, object> _mappings = new();
+
+    public IReadOnlyDictionary<Type, object> Mappings => _mappings;
 
     public DocumentMapping<T> For<T>() where T : class
     {
