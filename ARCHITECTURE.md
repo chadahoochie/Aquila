@@ -11,8 +11,22 @@ The Aquila repository (`Aquila.slnx`) is organized into modular assemblies desig
 ```
 Aquila/
 ├── src/
-│   ├── Aquila.Core/           # Core SPI abstractions, session engines, event store & projections
-│   └── Aquila.Cosmos/         # Azure Cosmos DB SPI storage provider & Cosmos event store
+│   ├── Aquila.Core/                    # Core SPI abstractions, session engines, event store & projections
+│   │   ├── Abstractions/               # IDocumentStore, IDocumentSession, IQuerySession, IEventStore
+│   │   ├── Configuration/               # StoreOptions, DocumentMapping<T>, SchemaPolicy, StoreMetadata
+│   │   ├── Events/                     # IEvent, EventEnvelope<T>, IEventUpcaster, UpcasterRegistry, ISnapshotStrategy
+│   │   ├── Exceptions/                 # AquilaException, AquilaConcurrencyException
+│   │   ├── Patching/                   # IPatchExpression<T>, PatchExpression<T>
+│   │   ├── Projections/                # IProjection, SingleStreamProjection<T>, MultiStreamProjection<TDoc,TId>
+│   │   │   └── Daemon/                 # IProjectionDaemon, ProjectionDaemon, IProjectionCheckpointStore
+│   │   ├── Queries/                    # ICompiledQuery<TDoc,TResult>, CompiledQueryCache
+│   │   ├── Sessions/                   # DocumentSession, QuerySession, IIdentityMap, TrackingMode, DocumentStore
+│   │   └── Storage/                    # StorageContracts (SPI), InMemoryStorageProvider, ISqlExpressionTranslator
+│   └── Aquila.Cosmos/                   # Azure Cosmos DB SPI storage provider & Cosmos event store
+│       ├── Storage/                    # CosmosStorageProvider, CosmosDocumentEnvelope<T>, CosmosExpressionRewriter
+│       ├── Events/                     # CosmosEventStore
+│       ├── Projections/                # CosmosProjectionDaemon (Change Feed-aware)
+│       └── Extensions/                 # ServiceCollectionExtensions (AddAquila, UseCosmos), CosmosDaemonExtensions
 ├── tests/
 │   ├── Aquila.Core.Tests/     # Unit test suite for Aquila.Core (xUnit v3, NSubstitute, Shouldly)
 │   ├── Aquila.Cosmos.Tests/   # Unit test suite for Aquila.Cosmos (xUnit v3, NSubstitute, Shouldly)
@@ -25,8 +39,8 @@ Aquila/
 
 | Project | Target Framework | Core Responsibilities |
 | :--- | :--- | :--- |
-| [`Aquila.Core`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core) | `net10.0` | Core abstractions (`IDocumentStore`, `IDocumentSession`, `IQuerySession`, `IEventStore`), session life-cycle management, Schema/Mapping policies, Projection engine (`SingleStreamProjection`), Storage Provider SPI contracts, and built-in [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs). |
-| [`Aquila.Cosmos`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos) | `net10.0` | Azure Cosmos DB implementation of [`IAquilaStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L71), custom Cosmos document envelopes (`CosmosDocumentEnvelope<T>`), direct LINQ/SQL query translators, and ASP.NET Core DI extensions (`AddAquila`, `UseCosmos`). |
+| [`Aquila.Core`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core) | `net10.0` | Core abstractions (`IDocumentStore`, `IDocumentSession`, `IQuerySession`, `IEventStore`), session life-cycle management (`TrackingMode`, `IIdentityMap`), Schema/Mapping policies, the Projection engine (`SingleStreamProjection<T>`, `MultiStreamProjection<TDoc,TId>`) and its async `ProjectionDaemon`, the partial-document `Patching` API, `ICompiledQuery` caching, event upcasting/snapshotting, Storage Provider SPI contracts, and the built-in [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs). |
+| [`Aquila.Cosmos`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos) | `net10.0` | Azure Cosmos DB implementation of [`IAquilaStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L71), custom Cosmos document envelopes (`CosmosDocumentEnvelope<T>`), predicate rewriting via `CosmosExpressionRewriter` onto the native Cosmos LINQ provider, the Change Feed-aware `CosmosProjectionDaemon`, and ASP.NET Core DI extensions (`AddAquila`, `UseCosmos`, `AddCosmosDaemon`). |
 | [`Aquila.Samples`](file:///home/chad/source/dotnet/Aquila/samples/Aquila.Samples) | `net10.0` | Runnable demonstration program illustrating document store configuration, event stream appending, aggregate rehydration, and inline projection handling. |
 | [`Aquila.Tests`](file:///home/chad/source/dotnet/Aquila/tests/Aquila.Tests) | `net10.0` | Automated test suite verifying session contracts, storage providers, optimistic concurrency exceptions, projection lifecycles, and security boundary isolation. |
 
@@ -213,6 +227,73 @@ sequenceDiagram
 
 ---
 
+### Partial Document Patch Flow
+
+`Patch<T>()` defers the JSON-pointer path resolution and operation queuing until `SaveChangesAsync()`, allowing Cosmos DB to apply the mutation server-side without a full document round-trip.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application Code
+    participant Session as DocumentSession
+    participant Patch as PatchExpression<T>
+    participant Provider as IDocumentStorageProvider
+
+    App->>Session: Patch<T>(id, partitionKey)
+    Session-->>App: return PatchExpression<T>
+    App->>Patch: Set(prop, value) / Increment(prop) / Append(prop, elem) / Remove(prop, elem)
+    Patch->>Patch: Resolve lambda to JSON pointer path, append PatchOperationData
+    Session->>Session: Queue StorageOperation(Patch, Operations)
+
+    App->>Session: SaveChangesAsync()
+    Session->>Provider: ExecuteBatchAsync([... Patch operation ...])
+    Provider->>Provider: Translate each PatchOperationData to native patch call
+    Note over Provider: Cosmos: PatchOperation.Replace/Increment/Add/Remove<br/>InMemory: reflection-based path walk
+    Provider-->>Session: Batch committed
+```
+
+---
+
+### Async Projection Daemon — Catch-Up & Rebuild Flow
+
+`ProjectionLifecycle.Async` projections are decoupled from the write path. A background `IProjectionDaemon` polls the global event sequence and advances each projection's durable checkpoint independently, enabling zero-downtime rebuilds by resetting a checkpoint to `0` and replaying history.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application Code
+    participant Daemon as ProjectionDaemon (BackgroundService)
+    participant Checkpoints as IProjectionCheckpointStore
+    participant Provider as IEventStorageProvider
+    participant Proj as IProjection (Async)
+    participant Docs as IDocumentStorageProvider
+
+    loop Poll every 100ms (idle) / 500ms (on error)
+        Daemon->>Checkpoints: GetCheckpointAsync(projectionName) for each active projection
+        Daemon->>Daemon: Compute minSequence across all checkpoints
+        Daemon->>Provider: FetchGlobalEventsAsync(fromSequence = minSequence, batchSize = 100)
+        Provider-->>Daemon: IReadOnlyList<IEvent>
+        loop For each projection with unconsumed events
+            Daemon->>Proj: ApplyEvent(event) / ProcessEventAsync(event, session)
+            Proj->>Docs: UpsertDocumentAsync / DeleteDocumentAsync
+            Daemon->>Checkpoints: SaveCheckpointAsync(projectionName, newSequence)
+        end
+    end
+
+    Note over Daemon: Zero-Downtime Rebuild (triggered explicitly)
+    App->>Daemon: RebuildProjectionAsync<TProjection>()
+    Daemon->>Daemon: StopProjectionAsync(name)
+    Daemon->>Docs: Query & delete all existing read-model documents
+    Daemon->>Checkpoints: SaveCheckpointAsync(name, sequence = 0)
+    Daemon->>Provider: FetchGlobalEventsAsync(fromSequence = 0)
+    Daemon->>Proj: Replay full event history via ApplyEvent
+    Daemon->>Daemon: StartProjectionAsync(name)
+```
+
+On Cosmos DB, [`CosmosProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs) additionally supports `ProcessChangeFeedBatchAsync`, consuming Cosmos DB Change Feed items directly instead of re-polling `FetchGlobalEventsAsync`, reducing end-to-end projection lag.
+
+---
+
 ## 4. Performance Optimizations & Security Controls
 
 ### Performance Optimizations
@@ -225,6 +306,11 @@ sequenceDiagram
    - **Property Copier**: [`SingleStreamProjection<T>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/SingleStreamProjection.cs#L78) compiles static block expressions for copying properties between aggregate instances during projection execution.
 3. **1-RU Point Read Execution**: [`CosmosStorageProvider.ReadDocumentAsync`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs#L60) executes direct `ReadItemAsync` calls using both `Id` and `PartitionKey`, bypassing SQL parsing and utilizing Cosmos DB 1-RU point read efficiency.
 4. **Sync-over-Async Prevention**: Calling synchronous `Query<T>()` throws `NotSupportedException` to prevent thread pool starvation in async web application workloads. Developers must use asynchronous `QueryAsync<T>()`.
+5. **Compiled Query Caching**: [`CompiledQueryCache`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Queries/CompiledQueryCache.cs) compiles each `ICompiledQuery<TDoc,TResult>` type's `QueryIs()` expression tree into a delegate exactly once (keyed by `Type` in a `ConcurrentDictionary`). A `QueryParameterBindingVisitor` rewrites closed-over instance members into a rebindable parameter so the same compiled delegate serves every future call with that query shape, regardless of parameter values.
+6. **Compiled Event Upcasting**: [`UpcasterRegistry`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/UpcasterRegistry.cs) builds a compiled expression-tree factory (`CreateUpcastEnvelope`, cached per source type) to copy `IEvent` metadata onto a new `EventEnvelope<TNew>` after an upcast, rather than using reflection-based property copying on every fetch.
+7. **Cosmos Native LINQ + Expression Rewriting**: [`CosmosStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs) rewrites storage-agnostic `DocumentEnvelope<T>` predicates onto `CosmosDocumentEnvelope<T>` via [`CosmosExpressionRewriter`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosExpressionRewriter.cs), then hands the rewritten predicate to the Cosmos SDK's native LINQ provider for server-side SQL generation — avoiding a hand-rolled SQL translation layer on the hot query path (see note below on `ISqlExpressionTranslator`).
+
+> **Note:** [`ISqlExpressionTranslator`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/ISqlExpressionTranslator.cs) and its [`DefaultSqlExpressionTranslator`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/DefaultSqlExpressionTranslator.cs) implementation are available as an extensibility SPI for storage providers that need to translate LINQ predicates into a native query language by hand. `CosmosStorageProvider` does not currently invoke this translator — it relies on the Cosmos SDK's own LINQ-to-SQL provider instead. Custom storage providers targeting databases without a native LINQ provider (or SDKs you want to bypass) are the intended consumer of this SPI.
 
 ---
 
