@@ -151,4 +151,68 @@ public sealed class IdentityMapTests
 
         session.IdentityMap.TryGet<TestDoc>("doc-1", out _).ShouldBeFalse();
     }
+
+    [Fact]
+    public void NoIdentityMap_TryGet_Always_Returns_False()
+    {
+        IIdentityMap map = NoIdentityMap.Instance;
+
+        var found = map.TryGet<TestDoc>("any-id", out var result);
+
+        found.ShouldBeFalse();
+        result.ShouldBeNull();
+    }
+
+    [Fact]
+    public void NoIdentityMap_Track_Overloads_Are_NoOps()
+    {
+        IIdentityMap map = NoIdentityMap.Instance;
+        var doc = new TestDoc("1", "Item 1");
+        var envelope = new DocumentEnvelope<TestDoc> { Id = "1", Data = doc };
+
+        map.Track("1", doc, envelope);
+        map.Track("1", doc, envelope, snapshot: (byte[]?)null);
+        map.Track("1", doc, envelope, recordSnapshot: true);
+
+        map.TryGet<TestDoc>("1", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void NoIdentityMap_Untrack_And_Clear_Are_NoOps()
+    {
+        IIdentityMap map = NoIdentityMap.Instance;
+
+        Should.NotThrow(() => map.Untrack<TestDoc>("1"));
+        Should.NotThrow(() => map.Clear());
+    }
+
+    [Fact]
+    public void NoIdentityMap_GetEnvelope_Always_Returns_Null()
+    {
+        IIdentityMap map = NoIdentityMap.Instance;
+
+        map.GetEnvelope<TestDoc>("1").ShouldBeNull();
+    }
+
+    [Fact]
+    public void NoIdentityMap_GetTrackedEntities_Returns_Empty()
+    {
+        IIdentityMap map = NoIdentityMap.Instance;
+
+        map.GetTrackedEntities().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void NoIdentityMap_UpdateSnapshot_Is_NoOp()
+    {
+        IIdentityMap map = NoIdentityMap.Instance;
+
+        Should.NotThrow(() => map.UpdateSnapshot(typeof(TestDoc), "1", new byte[] { 1, 2, 3 }));
+    }
+
+    [Fact]
+    public void NoIdentityMap_Instance_Is_Singleton()
+    {
+        NoIdentityMap.Instance.ShouldBeSameAs(NoIdentityMap.Instance);
+    }
 }

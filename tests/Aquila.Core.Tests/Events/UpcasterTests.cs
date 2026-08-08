@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Aquila.Core.Events;
 using Aquila.Core.Sessions;
+using Shouldly;
 using Xunit;
 
 namespace Aquila.Core.Tests;
@@ -144,6 +145,15 @@ public class UpcasterTests
         var events = await session.Events.FetchStreamAsync(streamId, ct: TestContext.Current.CancellationToken);
         Assert.Single(events);
         Assert.IsType<V1OrderPlaced>(events[0].Data);
+    }
+
+    [Fact]
+    public void EventUpcaster_SourceType_And_TargetType_Reflect_Generic_Arguments()
+    {
+        IEventUpcaster upcaster = new V1ToV2OrderPlacedUpcaster();
+
+        upcaster.SourceType.ShouldBe(typeof(V1OrderPlaced));
+        upcaster.TargetType.ShouldBe(typeof(V2OrderPlaced));
     }
 }
 

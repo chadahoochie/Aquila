@@ -168,4 +168,78 @@ public sealed class SqlExpressionTranslatorTests
         result.SqlClause.ShouldBe("c.Data.Address.City = @p0");
         result.Parameters["@p0"].ShouldBe("Seattle");
     }
+
+    [Fact]
+    public void Translate_Null_Comparison_On_Right_Produces_Is_Null()
+    {
+        Expression<Func<DocumentEnvelope<TestUser>, bool>> predicate = u => u.Data.Name == null;
+
+        var result = _translator.Translate(predicate);
+
+        result.SqlClause.ShouldBe("c.Data.Name IS NULL");
+        result.Parameters.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Translate_Null_Comparison_NotEqual_On_Right_Produces_Is_Not_Null()
+    {
+        Expression<Func<DocumentEnvelope<TestUser>, bool>> predicate = u => u.Data.Name != null;
+
+        var result = _translator.Translate(predicate);
+
+        result.SqlClause.ShouldBe("c.Data.Name IS NOT NULL");
+        result.Parameters.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Translate_Null_Comparison_On_Left_Produces_Is_Null()
+    {
+        Expression<Func<DocumentEnvelope<TestUser>, bool>> predicate = u => null == u.Data.Name;
+
+        var result = _translator.Translate(predicate);
+
+        result.SqlClause.ShouldBe("c.Data.Name IS NULL");
+    }
+
+    [Fact]
+    public void Translate_Unary_Not_Wraps_Operand_In_Not()
+    {
+        Expression<Func<DocumentEnvelope<TestUser>, bool>> predicate = u => !u.Data.IsActive;
+
+        var result = _translator.Translate(predicate);
+
+        result.SqlClause.ShouldBe("NOT (c.Data.IsActive)");
+    }
+
+    [Fact]
+    public void Translate_Enumerable_Contains_Empty_Captured_Collection_Produces_False_Literal()
+    {
+        var allowedAges = Array.Empty<int>();
+        Expression<Func<DocumentEnvelope<TestUser>, bool>> predicate = u => allowedAges.Contains(u.Data.Age);
+
+        var result = _translator.Translate(predicate);
+
+        result.SqlClause.ShouldBe("1=0");
+        result.Parameters.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Translate_Unsupported_Binary_Operator_Throws_NotSupportedException()
+    {
+        var parameter = Expression.Parameter(typeof(DocumentEnvelope<TestUser>), "u");
+        var ageAccess = Expression.Property(Expression.Property(parameter, nameof(DocumentEnvelope<TestUser>.Data)), nameof(TestUser.Age));
+        var multiply = Expression.Multiply(ageAccess, Expression.Constant(2));
+        var body = Expression.GreaterThan(multiply, Expression.Constant(10));
+        var predicate = Expression.Lambda<Func<DocumentEnvelope<TestUser>, bool>>(body, parameter);
+
+        Should.Throw<NotSupportedException>(() => _translator.Translate(predicate));
+    }
+
+    [Fact]
+    public void Translate_Unsupported_Method_Call_Throws_NotSupportedException()
+    {
+        Expression<Func<DocumentEnvelope<TestUser>, bool>> predicate = u => u.Data.Name.ToUpper() == "ALICE";
+
+        Should.Throw<NotSupportedException>(() => _translator.Translate(predicate));
+    }
 }
