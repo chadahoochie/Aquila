@@ -257,6 +257,49 @@ public sealed class DocumentSessionTests
     }
 
     [Theory, AutoNSubstituteData]
+    public async Task SoftDelete_Sets_IsDeleted_Flag_And_Persists(
+        IAquilaStorageProvider storage,
+        IDocumentStorageProvider docStorage,
+        SampleDocument document)
+    {
+        // Arrange
+        storage.Documents.Returns(docStorage);
+        var options = new StoreOptions { StorageProvider = storage };
+        var envelope = new DocumentEnvelope<SampleDocument>
+        {
+            Id = document.Id,
+            PartitionKey = nameof(SampleDocument),
+            DocType = nameof(SampleDocument),
+            IsDeleted = false,
+            Data = document
+        };
+
+        docStorage.ReadDocumentAsync<SampleDocument>(document.Id, nameof(SampleDocument), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DocumentEnvelope<SampleDocument>?>(envelope));
+
+        using var session = new DocumentSession(storage, options);
+
+        // Act
+        session.SoftDelete<SampleDocument>(document.Id);
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        // Assert
+        await docStorage.Received(1).ExecuteBatchAsync(
+            Arg.Is<IEnumerable<StorageOperation>>(ops => System.Linq.Enumerable.Any(ops, op => op.Id == document.Id && ((DocumentEnvelope<SampleDocument>)op.Document).IsDeleted)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void AquilaConcurrencyException_InheritsFrom_AquilaException()
+    {
+        var ex = new Aquila.Core.Exceptions.AquilaConcurrencyException("doc-1", "1", "2");
+        ex.ShouldBeAssignableTo<Aquila.Core.Exceptions.AquilaException>();
+        ex.DocumentId.ShouldBe("doc-1");
+        ex.ExpectedVersion.ShouldBe("1");
+        ex.ActualVersion.ShouldBe("2");
+    }
+
+    [Theory, AutoNSubstituteData]
     public void Query_Method_Throws_NotSupportedException(
         IAquilaStorageProvider storage)
     {
@@ -268,3 +311,4 @@ public sealed class DocumentSessionTests
 #pragma warning restore CS0618
     }
 }
+

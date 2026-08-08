@@ -34,24 +34,24 @@ public class DirtyTrackingTests
         using (var setupSession = _store.OpenSession())
         {
             setupSession.Store(new DirtyTrackingTestEntity { Id = "dt-1", Name = "Original", Age = 30 });
-            await setupSession.SaveChangesAsync();
+            await setupSession.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Act - Load and mutate entity in DirtyTracking session without calling Store()
         using (var session = _store.OpenSession(TrackingMode.DirtyTracking))
         {
             session.TrackingMode.ShouldBe(TrackingMode.DirtyTracking);
-            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("dt-1");
+            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("dt-1", ct: TestContext.Current.CancellationToken);
             entity.ShouldNotBeNull();
             entity.Name = "Mutated Automatically";
             entity.Age = 31;
-            await session.SaveChangesAsync();
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert - Verify state was persisted automatically
         using (var verifySession = _store.OpenSession())
         {
-            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("dt-1");
+            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("dt-1", ct: TestContext.Current.CancellationToken);
             reloaded.ShouldNotBeNull();
             reloaded.Name.ShouldBe("Mutated Automatically");
             reloaded.Age.ShouldBe(31);
@@ -65,23 +65,23 @@ public class DirtyTrackingTests
         using (var setupSession = _store.OpenSession())
         {
             setupSession.Store(new DirtyTrackingTestEntity { Id = "im-1", Name = "Original IM", Age = 25 });
-            await setupSession.SaveChangesAsync();
+            await setupSession.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Act - Load and mutate entity in IdentityMap mode without calling Store()
         using (var session = _store.OpenSession(TrackingMode.IdentityMap))
         {
             session.TrackingMode.ShouldBe(TrackingMode.IdentityMap);
-            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("im-1");
+            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("im-1", ct: TestContext.Current.CancellationToken);
             entity.ShouldNotBeNull();
             entity.Name = "Mutated IM";
-            await session.SaveChangesAsync();
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert - Changes should NOT be persisted because Store() was not called
         using (var verifySession = _store.OpenSession())
         {
-            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("im-1");
+            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("im-1", ct: TestContext.Current.CancellationToken);
             reloaded.ShouldNotBeNull();
             reloaded.Name.ShouldBe("Original IM");
         }
@@ -89,17 +89,17 @@ public class DirtyTrackingTests
         // Act 2 - Mutate and explicitly call Store()
         using (var session = _store.OpenSession(TrackingMode.IdentityMap))
         {
-            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("im-1");
+            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("im-1", ct: TestContext.Current.CancellationToken);
             entity.ShouldNotBeNull();
             entity.Name = "Explicitly Stored";
             session.Store(entity);
-            await session.SaveChangesAsync();
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert 2 - Changes should be persisted
         using (var verifySession = _store.OpenSession())
         {
-            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("im-1");
+            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("im-1", ct: TestContext.Current.CancellationToken);
             reloaded.ShouldNotBeNull();
             reloaded.Name.ShouldBe("Explicitly Stored");
         }
@@ -112,7 +112,7 @@ public class DirtyTrackingTests
         using (var setupSession = _store.OpenSession())
         {
             setupSession.Store(new DirtyTrackingTestEntity { Id = "lw-1", Name = "Lightweight Original", Age = 40 });
-            await setupSession.SaveChangesAsync();
+            await setupSession.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Act & Assert
@@ -120,8 +120,8 @@ public class DirtyTrackingTests
         {
             session.TrackingMode.ShouldBe(TrackingMode.Lightweight);
 
-            var firstLoad = await session.LoadAsync<DirtyTrackingTestEntity>("lw-1");
-            var secondLoad = await session.LoadAsync<DirtyTrackingTestEntity>("lw-1");
+            var firstLoad = await session.LoadAsync<DirtyTrackingTestEntity>("lw-1", ct: TestContext.Current.CancellationToken);
+            var secondLoad = await session.LoadAsync<DirtyTrackingTestEntity>("lw-1", ct: TestContext.Current.CancellationToken);
 
             firstLoad.ShouldNotBeNull();
             secondLoad.ShouldNotBeNull();
@@ -131,16 +131,17 @@ public class DirtyTrackingTests
 
             // Mutating loaded entity in lightweight session without Store() does not auto persist
             firstLoad.Name = "Lightweight Mutated";
-            await session.SaveChangesAsync();
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         using (var verifySession = _store.OpenSession())
         {
-            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("lw-1");
+            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("lw-1", ct: TestContext.Current.CancellationToken);
             reloaded.ShouldNotBeNull();
             reloaded.Name.ShouldBe("Lightweight Original");
         }
     }
+
 
     [Fact]
     public async Task DirtyTracking_Does_Not_Save_Unmodified_Entities()
@@ -149,22 +150,22 @@ public class DirtyTrackingTests
         using (var setupSession = _store.OpenSession())
         {
             setupSession.Store(new DirtyTrackingTestEntity { Id = "dt-clean", Name = "Clean Entity", Age = 50 });
-            await setupSession.SaveChangesAsync();
+            await setupSession.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Act - Load in DirtyTracking session but do NOT mutate
         using (var session = _store.OpenSession(TrackingMode.DirtyTracking))
         {
-            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("dt-clean");
+            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("dt-clean", ct: TestContext.Current.CancellationToken);
             entity.ShouldNotBeNull();
             // No modifications made
-            await session.SaveChangesAsync();
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert - Verify unchanged
         using (var verifySession = _store.OpenSession())
         {
-            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("dt-clean");
+            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("dt-clean", ct: TestContext.Current.CancellationToken);
             reloaded.ShouldNotBeNull();
             reloaded.Name.ShouldBe("Clean Entity");
         }
@@ -177,26 +178,27 @@ public class DirtyTrackingTests
         using (var setupSession = _store.OpenSession())
         {
             setupSession.Store(new DirtyTrackingTestEntity { Id = "dt-multi", Name = "Phase 0", Age = 1 });
-            await setupSession.SaveChangesAsync();
+            await setupSession.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Act
         using (var session = _store.OpenSession(TrackingMode.DirtyTracking))
         {
-            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("dt-multi");
+            var entity = await session.LoadAsync<DirtyTrackingTestEntity>("dt-multi", ct: TestContext.Current.CancellationToken);
             entity!.Name = "Phase 1";
-            await session.SaveChangesAsync();
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
             entity.Name = "Phase 2";
-            await session.SaveChangesAsync();
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert
         using (var verifySession = _store.OpenSession())
         {
-            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("dt-multi");
+            var reloaded = await verifySession.LoadAsync<DirtyTrackingTestEntity>("dt-multi", ct: TestContext.Current.CancellationToken);
             reloaded.ShouldNotBeNull();
             reloaded.Name.ShouldBe("Phase 2");
         }
     }
 }
+

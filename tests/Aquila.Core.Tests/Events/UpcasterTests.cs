@@ -66,9 +66,9 @@ public class UpcasterTests
         using var session = store.OpenSession();
         var streamId = "order-" + Guid.NewGuid();
         session.Events.Append(streamId, new V1OrderPlaced(streamId, "Alice"));
-        await session.SaveChangesAsync();
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var events = await session.Events.FetchStreamAsync(streamId);
+        var events = await session.Events.FetchStreamAsync(streamId, ct: TestContext.Current.CancellationToken);
         Assert.Single(events);
         Assert.IsType<V2OrderPlaced>(events[0].Data);
 
@@ -76,7 +76,7 @@ public class UpcasterTests
         Assert.Equal("Alice", v2.CustomerName);
         Assert.Equal("alice@example.com", v2.Email);
 
-        var aggregate = await session.Events.AggregateStreamAsync<OrderAggregate>(streamId);
+        var aggregate = await session.Events.AggregateStreamAsync<OrderAggregate>(streamId, ct: TestContext.Current.CancellationToken);
         Assert.NotNull(aggregate);
         Assert.Equal("Alice", aggregate.CustomerName);
         Assert.Equal("alice@example.com", aggregate.Email);
@@ -95,9 +95,9 @@ public class UpcasterTests
         using var session = store.OpenSession();
         var streamId = "user-" + Guid.NewGuid();
         session.Events.Append(streamId, new V1UserCreated(streamId, "John Doe"));
-        await session.SaveChangesAsync();
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var events = await session.Events.FetchStreamAsync(streamId);
+        var events = await session.Events.FetchStreamAsync(streamId, ct: TestContext.Current.CancellationToken);
         Assert.Single(events);
         Assert.IsType<V3UserCreated>(events[0].Data);
 
@@ -119,9 +119,9 @@ public class UpcasterTests
         using var session = store.OpenSession();
         var streamId = "order-" + Guid.NewGuid();
         session.Events.Append(streamId, new V1OrderPlaced(streamId, "Bob"));
-        await session.SaveChangesAsync();
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var globalEvents = await session.Events.FetchGlobalEventsAsync(0);
+        var globalEvents = await session.Events.FetchGlobalEventsAsync(0, ct: TestContext.Current.CancellationToken);
         Assert.NotEmpty(globalEvents);
         var targetEvent = Assert.Single(globalEvents, e => e.StreamId == streamId);
         Assert.IsType<V2OrderPlaced>(targetEvent.Data);
@@ -139,10 +139,11 @@ public class UpcasterTests
         using var session = store.OpenSession();
         var streamId = "order-" + Guid.NewGuid();
         session.Events.Append(streamId, new V1OrderPlaced(streamId, "Charlie"));
-        await session.SaveChangesAsync();
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var events = await session.Events.FetchStreamAsync(streamId);
+        var events = await session.Events.FetchStreamAsync(streamId, ct: TestContext.Current.CancellationToken);
         Assert.Single(events);
         Assert.IsType<V1OrderPlaced>(events[0].Data);
     }
 }
+
