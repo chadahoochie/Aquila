@@ -256,7 +256,7 @@ public sealed class StorageProviderTests
         // Arrange
         var client = Substitute.For<CosmosClient>();
         var provider = new CosmosStorageProvider(client);
-        
+
         var containerField = typeof(CosmosStorageProvider).GetField("_container", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         containerField?.SetValue(provider, container);
 

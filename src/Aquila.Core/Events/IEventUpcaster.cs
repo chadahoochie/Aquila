@@ -9,8 +9,8 @@ public interface IEventUpcaster
     object Upcast(object oldEvent);
 }
 
-public abstract class EventUpcaster<TOld, TNew> : IEventUpcaster 
-    where TOld : class 
+public abstract class EventUpcaster<TOld, TNew> : IEventUpcaster
+    where TOld : class
     where TNew : class
 {
     public Type SourceType => typeof(TOld);

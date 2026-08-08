@@ -58,7 +58,7 @@ public sealed class ProjectionDaemonTests
     public async Task InMemoryProjectionCheckpointStore_Save_And_Get_Checkpoint()
     {
         IProjectionCheckpointStore store = new InMemoryProjectionCheckpointStore();
-        
+
         var initialSeq = await store.GetCheckpointAsync("TestProj", TestContext.Current.CancellationToken);
         initialSeq.ShouldBe(0);
 
