@@ -1,7 +1,9 @@
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -24,6 +26,13 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
     private readonly ILogger<ProjectionDaemon>? _logger;
     private readonly ConcurrentDictionary<string, bool> _stoppedProjections = new();
 
+    public ProjectionDaemon(IDocumentStore documentStore, IProjectionCheckpointStore checkpointStore, ILogger<ProjectionDaemon>? logger = null)
+    {
+        _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
+        _checkpointStore = checkpointStore ?? throw new ArgumentNullException(nameof(checkpointStore));
+        _logger = logger;
+    }
+
     public ProjectionDaemon(
         StoreOptions options,
         IProjectionCheckpointStore checkpointStore,
@@ -32,20 +41,10 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
     {
     }
 
-    public ProjectionDaemon(
-        IDocumentStore documentStore,
-        IProjectionCheckpointStore checkpointStore,
-        ILogger<ProjectionDaemon>? logger = null)
-    {
-        _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
-        _checkpointStore = checkpointStore ?? throw new ArgumentNullException(nameof(checkpointStore));
-        _logger = logger;
-    }
-
     public Task StartProjectionAsync(string projectionName, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
-        _stoppedProjections[projectionName] = false;
+        _stoppedProjections.TryRemove(projectionName, out _);
         return Task.CompletedTask;
     }
 
@@ -58,8 +57,17 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
 
     public async Task RebuildProjectionAsync<TProjection>(CancellationToken ct = default) where TProjection : IProjection
     {
-        var projectionName = typeof(TProjection).Name;
-        await RebuildProjectionAsync(projectionName, ct).ConfigureAwait(false);
+        var projection = _documentStore.Options.Projections.Projections.FirstOrDefault(p => p is TProjection)
+            ?? throw new InvalidOperationException($"Projection '{typeof(TProjection).Name}' is not registered.");
+
+        await StopProjectionAsync(projection.Name, ct).ConfigureAwait(false);
+
+        await _checkpointStore.SaveCheckpointAsync(projection.Name, 0, ct).ConfigureAwait(false);
+
+        await ClearProjectionDocumentsAsync(projection, ct).ConfigureAwait(false);
+
+        // 2. Reprocess historical events
+        await CatchUpProjectionAsync(projection.Name, ct).ConfigureAwait(false);
     }
 
     public async Task RebuildProjectionAsync(string projectionName, CancellationToken ct = default)
@@ -90,14 +98,14 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
             .MakeGenericMethod(docType);
 
         var envelopeType = typeof(DocumentEnvelope<>).MakeGenericType(docType);
-        var param = System.Linq.Expressions.Expression.Parameter(envelopeType, "env");
-        var lambda = System.Linq.Expressions.Expression.Lambda(System.Linq.Expressions.Expression.Constant(true), param);
+        var param = Expression.Parameter(envelopeType, "env");
+        var lambda = Expression.Lambda(Expression.Constant(true), param);
 
         var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.StorageProvider.Documents, new object?[] { lambda, null, ct })!;
         await queryTask.ConfigureAwait(false);
 
         var resultProperty = queryTask.GetType().GetProperty("Result")!;
-        var envelopes = (System.Collections.IEnumerable)resultProperty.GetValue(queryTask)!;
+        var envelopes = (IEnumerable)resultProperty.GetValue(queryTask)!;
 
         var deleteMethod = typeof(IDocumentStorageProvider)
             .GetMethod(nameof(IDocumentStorageProvider.DeleteDocumentAsync))!

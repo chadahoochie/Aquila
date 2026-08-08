@@ -87,7 +87,7 @@ public sealed class EventStoreSequenceTests
 
         var stream1 = Guid.NewGuid();
 
-        session.Events.StartStream<BankAccountAggregate>(stream1, 
+        session.Events.StartStream<BankAccountAggregate>(stream1,
             new AccountCreatedEvent(stream1, "Alice", 100m),
             new MoneyDepositedEvent(stream1, 50m),
             new MoneyDepositedEvent(stream1, 25m));
