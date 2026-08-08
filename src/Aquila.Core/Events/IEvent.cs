@@ -16,6 +16,9 @@ public interface IEvent
     string EventType { get; }
     object Data { get; }
     string TenantId { get; }
+    string? CorrelationId { get; set; }
+    string? CausationId { get; set; }
+    IReadOnlyDictionary<string, object> Headers { get; set; }
 }
 
 /// <summary>
@@ -31,6 +34,8 @@ public interface IEvent<out T> : IEvent where T : class
 /// </summary>
 public sealed class EventEnvelope<T> : IEvent<T> where T : class
 {
+    private IReadOnlyDictionary<string, object>? _headers;
+
     public Guid Id { get; set; } = Guid.NewGuid();
     public string StreamId { get; set; } = string.Empty;
     public long Version { get; set; }
@@ -42,6 +47,13 @@ public sealed class EventEnvelope<T> : IEvent<T> where T : class
 
     object IEvent.Data => Data;
     public string TenantId { get; set; } = "default";
+    public string? CorrelationId { get; set; }
+    public string? CausationId { get; set; }
+    public IReadOnlyDictionary<string, object> Headers
+    {
+        get => _headers ?? System.Collections.ObjectModel.ReadOnlyDictionary<string, object>.Empty;
+        set => _headers = value;
+    }
 }
 
 /// <summary>
