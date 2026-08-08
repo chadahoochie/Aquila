@@ -52,6 +52,27 @@ public class TestDaemonAsyncProjection : MultiStreamProjection<DaemonCustomerSum
     }
 }
 
+public sealed record DaemonAccountOpened(string AccountId, string Owner);
+
+public sealed class DaemonAccountAggregate
+{
+    public string AccountId { get; set; } = string.Empty;
+    public string Owner { get; set; } = string.Empty;
+}
+
+public sealed class DaemonSingleStreamAsyncProjection : SingleStreamProjection<DaemonAccountAggregate>
+{
+    public DaemonSingleStreamAsyncProjection()
+    {
+        Lifecycle = ProjectionLifecycle.Async;
+        ProjectEvent<DaemonAccountOpened>((e, agg) =>
+        {
+            agg.AccountId = e.AccountId;
+            agg.Owner = e.Owner;
+        });
+    }
+}
+
 public sealed class ProjectionDaemonTests
 {
     [Fact]
@@ -217,5 +238,83 @@ public sealed class ProjectionDaemonTests
         var options = new StoreOptions();
         var configured = options.AddAsyncDaemon();
         configured.ShouldBeSameAs(options);
+    }
+
+    [Fact]
+    public async Task Daemon_Processes_SingleStreamProjection_Branch_And_Updates_Aggregate_Document()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        options.Projections.Add<DaemonSingleStreamAsyncProjection>(ProjectionLifecycle.Async);
+
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        using (var session = store.OpenSession())
+        {
+            session.Events.StartStream<object>("accounts/acc-1", new DaemonAccountOpened("acc-1", "Alice"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await daemon.CatchUpAsync(TestContext.Current.CancellationToken);
+
+        var checkpoint = await checkpointStore.GetCheckpointAsync(nameof(DaemonSingleStreamAsyncProjection), TestContext.Current.CancellationToken);
+        checkpoint.ShouldBe(1);
+
+        var envelope = await storageProvider.Documents.ReadDocumentAsync<object>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
+        envelope.ShouldNotBeNull();
+        var aggregate = envelope.Data.ShouldBeOfType<DaemonAccountAggregate>();
+        aggregate.AccountId.ShouldBe("acc-1");
+        aggregate.Owner.ShouldBe("Alice");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_BackgroundService_Loop_Processes_Batch_And_Stops_Cleanly()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        options.Projections.Add<TestDaemonAsyncProjection>(ProjectionLifecycle.Async);
+
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        using (var session = store.OpenSession())
+        {
+            session.Events.StartStream<object>("orders/ord-1", new DaemonOrderPlaced("ord-1", "cust-9", 20.00m));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await daemon.StartAsync(TestContext.Current.CancellationToken);
+
+        // give the background polling loop time to process the batch, then hit the idle-delay branch
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        await daemon.StopAsync(TestContext.Current.CancellationToken);
+
+        var checkpoint = await checkpointStore.GetCheckpointAsync(nameof(TestDaemonAsyncProjection), TestContext.Current.CancellationToken);
+        checkpoint.ShouldBe(1);
+    }
+
+    private sealed class MinimalProjection : IProjection
+    {
+        public ProjectionLifecycle Lifecycle { get; set; }
+        public Type AggregateType => typeof(DaemonAccountAggregate);
+        public void ApplyEvent(IEvent @event, object aggregate)
+        {
+        }
+    }
+
+    [Fact]
+    public void IProjection_Name_DefaultInterfaceMember_Returns_Implementing_Type_Name()
+    {
+        IProjection projection = new MinimalProjection();
+
+        projection.Name.ShouldBe(nameof(MinimalProjection));
     }
 }

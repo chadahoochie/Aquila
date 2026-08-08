@@ -226,4 +226,43 @@ public sealed class LiveProjectionTests
         await Should.ThrowAsync<ArgumentException>(() => session.LiveStreamAsync<UserAggregate>("   ", TestContext.Current.CancellationToken));
         await Should.ThrowAsync<ArgumentException>(() => session.LiveStreamAsync<UserAggregate>((string)null!, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task QuerySession_TrackingMode_Constructor_Overload_Evaluates_LiveStream()
+    {
+        // Arrange
+        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
+        var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
+        var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
+        storageProvider.Documents.Returns(docStorage);
+        storageProvider.Events.Returns(eventStorage);
+
+        var options = new StoreOptions { StorageProvider = storageProvider };
+        options.Projections.Add<UserProjection>(ProjectionLifecycle.Live);
+
+        var streamId = Guid.NewGuid().ToString();
+        var userId = Guid.NewGuid();
+
+        var events = new IEvent[]
+        {
+            new EventEnvelope<UserRegisteredEvent>
+            {
+                StreamId = streamId,
+                Version = 1,
+                Data = new UserRegisteredEvent(userId, "Lightweight Larry", "larry@example.com")
+            }
+        };
+
+        eventStorage.FetchEventsAsync(streamId, "default", 0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
+
+        using var session = new QuerySession(storageProvider, options, TrackingMode.Lightweight);
+
+        // Act
+        var result = await session.LiveStreamAsync<UserAggregate>(streamId, TestContext.Current.CancellationToken);
+
+        // Assert
+        result.ShouldNotBeNull();
+        result.FullName.ShouldBe("Lightweight Larry");
+    }
 }
