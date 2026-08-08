@@ -14,10 +14,15 @@
 - ⚡ **1-RU Point Reads**: High-efficiency point reads (`LoadAsync<T>`) executing direct `ReadItemAsync` operations requiring ~1 Request Unit.
 - 🔌 **Pluggable Storage SPI**: Decoupled storage engine via [`IAquilaStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L71), supporting [`CosmosStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs) for cloud persistence and [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs) for unit testing and local development.
 - 📜 **Event Sourcing**: First-class stream append operations (`StartStream`, `Append`), expected version concurrency checks, stream fetching (`FetchStreamAsync`), and aggregate rehydration (`AggregateStreamAsync`).
-- 📊 **Projections**: Live read-model generation via [`SingleStreamProjection<TAggregate>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/SingleStreamProjection.cs), offering `Inline` transaction-scoped and `Async` background execution lifecycles.
+- 🔁 **Event Upcasting & Snapshotting**: Transparent schema evolution via [`IEventUpcaster`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/IEventUpcaster.cs) chains, plus [`ISnapshotStrategy<TAggregate>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/ISnapshotStrategy.cs)-driven aggregate snapshots to avoid full-stream replay on rehydration.
+- 📊 **Projections**: Read-model generation via [`SingleStreamProjection<TAggregate>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/SingleStreamProjection.cs) and [`MultiStreamProjection<TDoc,TId>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/MultiStreamProjection.cs), offering `Inline` (transaction-scoped), `Async` (background daemon), and `Live` (on-the-fly, unpersisted) execution lifecycles.
+- 🛰️ **Async Projection Daemon**: A background [`IProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/IProjectionDaemon.cs) with durable checkpointing, `CatchUpAsync()`, and zero-downtime `RebuildProjectionAsync()` — plus a Cosmos DB Change Feed-aware variant ([`CosmosProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs)) via `AddCosmosDaemon()`.
+- ✂️ **Partial Document Patching**: Fluent [`IPatchExpression<T>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Patching/IPatchExpression.cs) API (`Set`, `Increment`, `Append`, `Remove`) for low-payload mutations that skip full read-modify-write round-trips, executed server-side on Cosmos DB via the Patch API.
+- 🧮 **Compiled Queries**: [`ICompiledQuery<TDoc,TResult>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Queries/ICompiledQuery.cs) with a `CompiledQueryCache` that compiles each query shape's expression tree once and reuses it across parameter values.
+- 🎛️ **Session Tracking Modes**: Choose `Lightweight`, `IdentityMap`, or `DirtyTracking` per session to control identity-map caching and automatic JSON-snapshot dirty checking.
 - 🏢 **Multi-Tenant Isolation**: Tenant scoping enforced natively at session, document envelope, query, and event store levels.
 - 🛡️ **Built-in Safety & Performance**:
-  - Compiled Expression Trees for zero-reflection event instantiation, property copying, and ID selector resolution.
+  - Compiled Expression Trees for zero-reflection event instantiation, property copying, ID selector resolution, upcast envelope creation, and compiled-query execution.
   - Automatic document state snapshotting on `Store()` to prevent post-store object mutations.
   - Sync-over-async thread starvation protection (blocking synchronous queries throw `NotSupportedException`).
 
@@ -218,7 +223,7 @@ dotnet test Aquila.slnx
 ## Documentation
 
 - 📐 [Architecture Guide](ARCHITECTURE.md) - Detailed sitemap, SPI storage engine specs, sequence diagrams, and security controls.
-- 📖 [Usage & Features Guide](USAGE.md) - Deep dive into document mapping, soft deletes, optimistic concurrency, projections, and multi-tenancy.
+- 📖 [Usage & Features Guide](USAGE.md) - Deep dive into document mapping, soft deletes, optimistic concurrency, event sourcing, projections (single/multi-stream/live/async), the projection daemon, patching, upcasting, snapshotting, compiled queries, session tracking modes, and multi-tenancy.
 
 ---
 
