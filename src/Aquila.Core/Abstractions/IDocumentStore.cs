@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Linq.Expressions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
+using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
 
 namespace Aquila.Core.Abstractions;
@@ -24,6 +25,7 @@ public interface IEventStore
 
     Task<IReadOnlyList<IEvent>> FetchStreamAsync(Guid streamId, long fromVersion = 0, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchStreamAsync(string streamId, long fromVersion = 0, CancellationToken ct = default);
+    Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default);
 
     Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new();
     Task<TAggregate?> AggregateStreamAsync<TAggregate>(string streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new();
@@ -36,6 +38,7 @@ public interface IQuerySession : IDisposable, IAsyncDisposable
 {
     string TenantId { get; }
     IEventStore Events { get; }
+    IIdentityMap IdentityMap { get; }
 
     Task<T?> LoadAsync<T>(string id, string? partitionKey = null, CancellationToken ct = default) where T : class;
     Task<T?> LoadAsync<T>(Guid id, string? partitionKey = null, CancellationToken ct = default) where T : class;

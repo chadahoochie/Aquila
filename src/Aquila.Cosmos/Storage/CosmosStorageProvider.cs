@@ -18,6 +18,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
     private Container _container = null!;
     private readonly string _databaseName;
     private readonly string _containerName;
+    private long _globalSequence;
 
     public string ProviderName => "AzureCosmosDB";
     public IDocumentStorageProvider Documents => this;
@@ -201,6 +202,10 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         foreach (var @evt in eventList)
         {
             currentVersion++;
+            if (@evt.GlobalSequence == 0)
+            {
+                @evt.SetGlobalSequence(Interlocked.Increment(ref _globalSequence));
+            }
             var doc = new CosmosDocumentEnvelope<object>
             {
                 Id = $"$event_{streamId}_v{currentVersion}",
@@ -284,6 +289,54 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         }
 
         return events.OrderBy(e => e.Version).ToList();
+    }
+
+    public async Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default)
+    {
+        if (batchSize <= 0)
+        {
+            return Array.Empty<IEvent>();
+        }
+
+        var queryText = string.IsNullOrEmpty(tenantId)
+            ? "SELECT * FROM c WHERE c._docType = '$event'"
+            : "SELECT * FROM c WHERE c._docType = '$event' AND c._tenantId = @tenantId";
+
+        var queryDef = new QueryDefinition(queryText);
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            queryDef = queryDef.WithParameter("@tenantId", tenantId);
+        }
+
+        var events = new List<IEvent>();
+        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef);
+
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(ct);
+            foreach (var item in response)
+            {
+                IEvent? @event = item.Data as IEvent;
+                if (@event == null && item.Data != null)
+                {
+                    var rawJson = item.Data.ToString();
+                    if (!string.IsNullOrEmpty(rawJson))
+                    {
+                        @event = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                    }
+                }
+
+                if (@event != null)
+                {
+                    if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId) && @event.GlobalSequence > fromGlobalSequence)
+                    {
+                        events.Add(@event);
+                    }
+                }
+            }
+        }
+
+        return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
     }
 
     public async Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default)

@@ -59,6 +59,8 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             DocType = docType,
             Document = envelope
         });
+
+        InnerIdentityMap.Track(id, document, envelope);
     }
 
     public void Store<T>(IEnumerable<T> documents) where T : class

@@ -215,6 +215,16 @@ public sealed class CosmosStorageProviderTests
     }
 
     [Fact]
+    public async Task FetchGlobalEventsAsync_Returns_EmptyList_When_BatchSize_Is_Zero_Or_Negative()
+    {
+        var resultZero = await _provider.Events.FetchGlobalEventsAsync(0, batchSize: 0, ct: TestContext.Current.CancellationToken);
+        resultZero.ShouldBeEmpty();
+
+        var resultNeg = await _provider.Events.FetchGlobalEventsAsync(0, batchSize: -10, ct: TestContext.Current.CancellationToken);
+        resultNeg.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void StorageProvider_InputValidation_ThrowsExceptions()
     {
         Should.ThrowAsync<ArgumentException>(() => _provider.Documents.ReadDocumentAsync<MockDoc>("", "pk"));

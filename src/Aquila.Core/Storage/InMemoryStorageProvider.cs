@@ -15,6 +15,7 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
     private readonly ConcurrentDictionary<string, object> _documents = new();
     private readonly ConcurrentDictionary<string, EventStreamHeader> _streamHeaders = new();
     private readonly ConcurrentDictionary<string, List<IEvent>> _eventStreams = new();
+    private long _globalSequence;
 
     public string ProviderName => "InMemory";
     public IDocumentStorageProvider Documents => this;
@@ -122,6 +123,10 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
             foreach (var @evt in eventList)
             {
                 header.Version++;
+                if (@evt.GlobalSequence == 0)
+                {
+                    @evt.SetGlobalSequence(Interlocked.Increment(ref _globalSequence));
+                }
                 stream.Add(@evt);
             }
 
@@ -147,6 +152,30 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
             }
         }
         return Task.FromResult<IReadOnlyList<IEvent>>(Array.Empty<IEvent>());
+    }
+
+    public Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default)
+    {
+        if (batchSize <= 0)
+        {
+            return Task.FromResult<IReadOnlyList<IEvent>>(Array.Empty<IEvent>());
+        }
+
+        List<IEvent> allEvents;
+        lock (_eventStreams)
+        {
+            allEvents = _eventStreams.Values
+                .SelectMany(s =>
+                {
+                    lock (s) { return s.ToList(); }
+                })
+                .Where(e => (string.IsNullOrEmpty(tenantId) || e.TenantId == tenantId) && e.GlobalSequence > fromGlobalSequence)
+                .OrderBy(e => e.GlobalSequence)
+                .Take(batchSize)
+                .ToList();
+        }
+
+        return Task.FromResult<IReadOnlyList<IEvent>>(allEvents);
     }
 
     public Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default)

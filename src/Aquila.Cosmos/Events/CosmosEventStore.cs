@@ -54,6 +54,9 @@ public sealed class CosmosEventStore : IEventStore
     public Task<IReadOnlyList<IEvent>> FetchStreamAsync(string streamId, long fromVersion = 0, CancellationToken ct = default) =>
         _innerStore.FetchStreamAsync(streamId, fromVersion, ct);
 
+    public Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default) =>
+        _innerStore.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, ct);
+
     public Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new() =>
         _innerStore.AggregateStreamAsync<TAggregate>(streamId, version, ct);
 

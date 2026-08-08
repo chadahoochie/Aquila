@@ -107,6 +107,11 @@ public sealed class CoreEventStore : IEventStore
         return await _storage.Events.FetchEventsAsync(streamId, _tenantId, fromVersion, ct);
     }
 
+    public async Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default)
+    {
+        return await _storage.Events.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, _tenantId, ct);
+    }
+
     public Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new()
     {
         return AggregateStreamAsync<TAggregate>(streamId.ToString(), version, ct);
@@ -260,8 +265,10 @@ public abstract class QuerySessionBase : IQuerySession
     protected readonly IAquilaStorageProvider Storage;
     protected readonly StoreOptions Options;
     protected readonly CoreEventStore EventStore;
+    protected readonly IIdentityMap InnerIdentityMap;
 
     public string TenantId { get; }
+    public IIdentityMap IdentityMap => InnerIdentityMap;
 
     protected QuerySessionBase(IAquilaStorageProvider storage, StoreOptions options, string? tenantId = null)
     {
@@ -276,6 +283,7 @@ public abstract class QuerySessionBase : IQuerySession
         Options = options;
         TenantId = tenantId ?? options.DefaultTenantId;
         EventStore = new CoreEventStore(storage, TenantId);
+        InnerIdentityMap = new IdentityMap();
     }
 
     public IEventStore Events => EventStore;
@@ -297,10 +305,17 @@ public abstract class QuerySessionBase : IQuerySession
             ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
         }
 
+        if (InnerIdentityMap.TryGet<T>(id, out var cachedEntity))
+        {
+            return cachedEntity;
+        }
+
         var pk = partitionKey ?? typeof(T).Name;
         var envelope = await Storage.Documents.ReadDocumentAsync<T>(id, pk, ct);
         if (envelope == null || envelope.IsDeleted) return null;
         if (envelope.TenantId != TenantId) return null;
+
+        InnerIdentityMap.Track(id, envelope.Data, envelope);
         return envelope.Data;
     }
 
@@ -313,14 +328,38 @@ public abstract class QuerySessionBase : IQuerySession
             ArgumentException.ThrowIfNullOrWhiteSpace(id);
         }
 
-        var idSet = idList.ToHashSet();
-        var docType = typeof(T).Name;
+        var results = new List<T>(idList.Count);
+        var missingIds = new List<string>();
 
-        var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
-            x => x.DocType == docType && !x.IsDeleted && x.TenantId == TenantId && idSet.Contains(x.Id),
-            ct);
+        foreach (var id in idList)
+        {
+            if (InnerIdentityMap.TryGet<T>(id, out var cached))
+            {
+                results.Add(cached!);
+            }
+            else
+            {
+                missingIds.Add(id);
+            }
+        }
 
-        return envelopes.Select(e => e.Data).ToList();
+        if (missingIds.Count > 0)
+        {
+            var idSet = missingIds.ToHashSet();
+            var docType = typeof(T).Name;
+
+            var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
+                x => x.DocType == docType && !x.IsDeleted && x.TenantId == TenantId && idSet.Contains(x.Id),
+                ct);
+
+            foreach (var envelope in envelopes)
+            {
+                InnerIdentityMap.Track(envelope.Id, envelope.Data, envelope);
+                results.Add(envelope.Data);
+            }
+        }
+
+        return results;
     }
 
     [Obsolete("Use QueryAsync<T>() to avoid sync-over-async thread pool starvation.")]
@@ -337,16 +376,39 @@ public abstract class QuerySessionBase : IQuerySession
             x => x.DocType == docType && !x.IsDeleted && x.TenantId == TenantId,
             ct);
 
-        if (compiled != null)
+        var matchingEnvelopes = compiled != null ? envelopes.Where(compiled) : envelopes;
+        var results = new List<T>();
+
+        foreach (var envelope in matchingEnvelopes)
         {
-            return envelopes.Where(compiled).Select(e => e.Data).ToList();
+            if (InnerIdentityMap.TryGet<T>(envelope.Id, out var cached))
+            {
+                results.Add(cached!);
+            }
+            else
+            {
+                InnerIdentityMap.Track(envelope.Id, envelope.Data, envelope);
+                results.Add(envelope.Data);
+            }
         }
-        return envelopes.Select(e => e.Data).ToList();
+
+        return results;
     }
 
-    public void Dispose() => GC.SuppressFinalize(this);
+    public void Clear()
+    {
+        InnerIdentityMap.Clear();
+    }
+
+    public void Dispose()
+    {
+        InnerIdentityMap.Clear();
+        GC.SuppressFinalize(this);
+    }
+
     public ValueTask DisposeAsync()
     {
+        InnerIdentityMap.Clear();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
