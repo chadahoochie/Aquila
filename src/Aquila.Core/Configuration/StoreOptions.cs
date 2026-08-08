@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using Aquila.Core.Events;
 using Aquila.Core.Projections;
 using Aquila.Core.Storage;
 
@@ -129,6 +130,22 @@ public sealed class ProjectionRegistration
     }
 }
 
+public sealed class EventRegistration
+{
+    public UpcasterRegistry Upcasters { get; } = new();
+
+    public void RegisterUpcaster<TUpcaster>() where TUpcaster : IEventUpcaster, new()
+    {
+        Upcasters.Register<TUpcaster>();
+    }
+
+    public void RegisterUpcaster(IEventUpcaster upcaster)
+    {
+        ArgumentNullException.ThrowIfNull(upcaster);
+        Upcasters.Register(upcaster);
+    }
+}
+
 public sealed class StoreOptions
 {
     public string DefaultTenantId { get; set; } = "default";
@@ -136,6 +153,7 @@ public sealed class StoreOptions
 
     public SchemaPolicy Schema { get; } = new();
     public ProjectionRegistration Projections { get; } = new();
+    public EventRegistration Events { get; } = new();
 
     public void UseStorageProvider(IAquilaStorageProvider provider)
     {

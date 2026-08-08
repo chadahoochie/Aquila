@@ -19,19 +19,26 @@ public sealed class CoreEventStore : IEventStore
 {
     private readonly IAquilaStorageProvider _storage;
     private readonly string _tenantId;
+    private readonly UpcasterRegistry? _upcasters;
     private readonly List<IEvent> _uncommittedEvents = new();
     private readonly Dictionary<string, long> _streamExpectedVersions = new();
 
     private static readonly ConcurrentDictionary<Type, Func<string, long, object, string, IEvent>> _envelopeFactories = new();
     private static readonly ConcurrentDictionary<(Type AggregateType, Type EventType), Action<object, object>?> _applyMethodCache = new();
 
-    public CoreEventStore(IAquilaStorageProvider storage, string tenantId)
+    public CoreEventStore(IAquilaStorageProvider storage, string tenantId, UpcasterRegistry? upcasters = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
         _storage = storage;
         _tenantId = tenantId;
+        _upcasters = upcasters;
+    }
+
+    public CoreEventStore(IAquilaStorageProvider storage, StoreOptions options, string tenantId)
+        : this(storage, tenantId, options?.Events?.Upcasters)
+    {
     }
 
     public IReadOnlyList<IEvent> UncommittedEvents => _uncommittedEvents;
@@ -105,12 +112,34 @@ public sealed class CoreEventStore : IEventStore
     public async Task<IReadOnlyList<IEvent>> FetchStreamAsync(string streamId, long fromVersion = 0, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
-        return await _storage.Events.FetchEventsAsync(streamId, _tenantId, fromVersion, ct);
+        var events = await _storage.Events.FetchEventsAsync(streamId, _tenantId, fromVersion, ct);
+        if (_upcasters == null || _upcasters.IsEmpty)
+        {
+            return events;
+        }
+
+        var upcastEvents = new List<IEvent>(events.Count);
+        foreach (var evt in events)
+        {
+            upcastEvents.Add(_upcasters.Upcast(evt));
+        }
+        return upcastEvents;
     }
 
     public async Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default)
     {
-        return await _storage.Events.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, _tenantId, ct);
+        var events = await _storage.Events.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, _tenantId, ct);
+        if (_upcasters == null || _upcasters.IsEmpty)
+        {
+            return events;
+        }
+
+        var upcastEvents = new List<IEvent>(events.Count);
+        foreach (var evt in events)
+        {
+            upcastEvents.Add(_upcasters.Upcast(evt));
+        }
+        return upcastEvents;
     }
 
     public Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new()
@@ -307,7 +336,7 @@ public abstract class QuerySessionBase : IQuerySession
         Options = options;
         TrackingMode = trackingMode;
         TenantId = tenantId ?? options.DefaultTenantId;
-        EventStore = new CoreEventStore(storage, TenantId);
+        EventStore = new CoreEventStore(storage, options, TenantId);
         InnerIdentityMap = trackingMode == TrackingMode.Lightweight ? NoIdentityMap.Instance : new IdentityMap();
     }
 
