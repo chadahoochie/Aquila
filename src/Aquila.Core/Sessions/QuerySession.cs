@@ -10,6 +10,7 @@ using Newtonsoft.Json;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
+using Aquila.Core.Queries;
 using Aquila.Core.Storage;
 
 namespace Aquila.Core.Sessions;
@@ -425,6 +426,16 @@ public abstract class QuerySessionBase : IQuerySession
         }
 
         return results;
+    }
+
+    public async Task<TResult> QueryAsync<TDoc, TResult>(ICompiledQuery<TDoc, TResult> query, CancellationToken ct = default) where TDoc : class
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var documents = await QueryAsync<TDoc>((Expression<Func<DocumentEnvelope<TDoc>, bool>>?)null, ct);
+        var queryable = documents.AsQueryable();
+
+        return CompiledQueryCache.Execute(queryable, query);
     }
 
     public Task<TDoc?> LiveStreamAsync<TDoc>(Guid streamId, CancellationToken ct = default) where TDoc : class, new()

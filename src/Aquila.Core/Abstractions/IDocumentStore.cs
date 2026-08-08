@@ -6,6 +6,7 @@ using System.Linq.Expressions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
 using Aquila.Core.Patching;
+using Aquila.Core.Queries;
 using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
 
@@ -48,6 +49,7 @@ public interface IQuerySession : IDisposable, IAsyncDisposable
 
     IQueryable<T> Query<T>() where T : class;
     Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class;
+    Task<TResult> QueryAsync<TDoc, TResult>(ICompiledQuery<TDoc, TResult> query, CancellationToken ct = default) where TDoc : class;
 
     Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, CancellationToken ct = default) where TDoc : class, new();
     Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, string? tenantId, CancellationToken ct = default) where TDoc : class, new();
