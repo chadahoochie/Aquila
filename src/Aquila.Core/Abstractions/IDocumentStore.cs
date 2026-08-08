@@ -62,6 +62,11 @@ public interface IQuerySession : IDisposable, IAsyncDisposable
 /// </summary>
 public interface IDocumentSession : IQuerySession
 {
+    string? CorrelationId { get; set; }
+    string? CausationId { get; set; }
+    IReadOnlyDictionary<string, object> Headers { get; }
+    void SetHeader(string key, object value);
+
     void Store<T>(T document, string? partitionKey = null) where T : class;
     void Store<T>(IEnumerable<T> documents) where T : class;
 

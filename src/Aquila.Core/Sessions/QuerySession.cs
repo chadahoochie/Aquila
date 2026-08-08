@@ -26,7 +26,13 @@ public sealed class CoreEventStore : IEventStore
     private static readonly ConcurrentDictionary<Type, Func<string, long, object, string, IEvent>> _envelopeFactories = new();
     private static readonly ConcurrentDictionary<(Type AggregateType, Type EventType), Action<object, object>?> _applyMethodCache = new();
 
-    public CoreEventStore(IAquilaStorageProvider storage, string tenantId, UpcasterRegistry? upcasters = null)
+    private readonly Func<(string? CorrelationId, string? CausationId, IReadOnlyDictionary<string, object> Headers)>? _headerProvider;
+
+    public CoreEventStore(
+        IAquilaStorageProvider storage,
+        string tenantId,
+        UpcasterRegistry? upcasters = null,
+        Func<(string? CorrelationId, string? CausationId, IReadOnlyDictionary<string, object> Headers)>? headerProvider = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
@@ -34,10 +40,15 @@ public sealed class CoreEventStore : IEventStore
         _storage = storage;
         _tenantId = tenantId;
         _upcasters = upcasters;
+        _headerProvider = headerProvider;
     }
 
-    public CoreEventStore(IAquilaStorageProvider storage, StoreOptions options, string tenantId)
-        : this(storage, tenantId, options?.Events?.Upcasters)
+    public CoreEventStore(
+        IAquilaStorageProvider storage,
+        StoreOptions options,
+        string tenantId,
+        Func<(string? CorrelationId, string? CausationId, IReadOnlyDictionary<string, object> Headers)>? headerProvider = null)
+        : this(storage, tenantId, options?.Events?.Upcasters, headerProvider)
     {
     }
 
@@ -61,6 +72,7 @@ public sealed class CoreEventStore : IEventStore
             ArgumentNullException.ThrowIfNull(evt);
             version++;
             var envelope = CreateEnvelope(evt.GetType(), streamId, version, evt, _tenantId);
+            ApplyHeaders(envelope, evt);
             _uncommittedEvents.Add(envelope);
         }
     }
@@ -100,7 +112,47 @@ public sealed class CoreEventStore : IEventStore
             ArgumentNullException.ThrowIfNull(evt);
             version++;
             var envelope = CreateEnvelope(evt.GetType(), streamId, version, evt, _tenantId);
+            ApplyHeaders(envelope, evt);
             _uncommittedEvents.Add(envelope);
+        }
+    }
+
+    private void ApplyHeaders(IEvent envelope, object sourceEvt)
+    {
+        var existingEvt = sourceEvt as IEvent;
+        if (_headerProvider != null)
+        {
+            var (correlationId, causationId, headers) = _headerProvider();
+            envelope.CorrelationId = correlationId ?? existingEvt?.CorrelationId;
+            envelope.CausationId = causationId ?? existingEvt?.CausationId;
+            if (headers != null && headers.Count > 0)
+            {
+                var combinedHeaders = new Dictionary<string, object>(headers);
+                if (existingEvt?.Headers != null)
+                {
+                    foreach (var kvp in existingEvt.Headers)
+                    {
+                        if (!combinedHeaders.ContainsKey(kvp.Key))
+                        {
+                            combinedHeaders[kvp.Key] = kvp.Value;
+                        }
+                    }
+                }
+                envelope.Headers = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(combinedHeaders);
+            }
+            else if (existingEvt?.Headers != null && existingEvt.Headers.Count > 0)
+            {
+                envelope.Headers = existingEvt.Headers;
+            }
+        }
+        else if (existingEvt != null)
+        {
+            envelope.CorrelationId = existingEvt.CorrelationId;
+            envelope.CausationId = existingEvt.CausationId;
+            if (existingEvt.Headers != null && existingEvt.Headers.Count > 0)
+            {
+                envelope.Headers = existingEvt.Headers;
+            }
         }
     }
 
@@ -323,6 +375,24 @@ public abstract class QuerySessionBase : IQuerySession
     internal IAquilaStorageProvider StorageProvider => Storage;
     internal StoreOptions StoreOptions => Options;
 
+    public string? CorrelationId { get; set; }
+    public string? CausationId { get; set; }
+
+    private Dictionary<string, object>? _headers;
+    public IReadOnlyDictionary<string, object> Headers =>
+        _headers != null
+            ? new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(_headers)
+            : System.Collections.ObjectModel.ReadOnlyDictionary<string, object>.Empty;
+
+    public void SetHeader(string key, object value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(value);
+
+        _headers ??= new Dictionary<string, object>();
+        _headers[key] = value;
+    }
+
     protected QuerySessionBase(IAquilaStorageProvider storage, StoreOptions options, TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
@@ -336,7 +406,7 @@ public abstract class QuerySessionBase : IQuerySession
         Options = options;
         TrackingMode = trackingMode;
         TenantId = tenantId ?? options.DefaultTenantId;
-        EventStore = new CoreEventStore(storage, options, TenantId);
+        EventStore = new CoreEventStore(storage, options, TenantId, () => (CorrelationId, CausationId, Headers));
         InnerIdentityMap = trackingMode == TrackingMode.Lightweight ? NoIdentityMap.Instance : new IdentityMap();
     }
 
