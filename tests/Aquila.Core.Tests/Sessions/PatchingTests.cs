@@ -25,6 +25,21 @@ public class PatchTestDocument
     public List<string> Tags { get; set; } = new();
 }
 
+public enum PatchTestPriority
+{
+    Low,
+    Medium,
+    High
+}
+
+public class PatchTestDocumentWithNullableNested
+{
+    public string Id { get; set; } = string.Empty;
+    public PatchTestAddress? Address { get; set; }
+    public PatchTestPriority Priority { get; set; }
+    public HashSet<string> Labels { get; set; } = new();
+}
+
 public class PatchingTests
 {
     [Fact]
@@ -157,5 +172,114 @@ public class PatchingTests
         loaded.ShouldNotBeNull();
         loaded.Status.ShouldBe("NewStatus");
         loaded.Count.ShouldBe(10);
+    }
+
+    [Fact]
+    public async Task DocumentSession_Patch_Targeting_Nonexistent_Property_Is_A_Silent_NoOp()
+    {
+        using var storage = new InMemoryStorageProvider();
+        var options = new StoreOptions { StorageProvider = storage };
+        using var session = new DocumentSession(storage, options);
+
+        var doc = new PatchTestDocument { Id = "doc-noop", Status = "Pending", Count = 1 };
+        session.Store(doc);
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var patch = (PatchExpression<PatchTestDocument>)session.Patch<PatchTestDocument>("doc-noop");
+        patch.Operations.Add(new PatchOperationData
+        {
+            Path = "/Data/NoSuchProperty",
+            Action = PatchAction.Set,
+            Value = "irrelevant"
+        });
+
+        await Should.NotThrowAsync(() => session.SaveChangesAsync(TestContext.Current.CancellationToken));
+
+        using var session2 = new DocumentSession(storage, options);
+        var loaded = await session2.LoadAsync<PatchTestDocument>("doc-noop", ct: TestContext.Current.CancellationToken);
+        loaded.ShouldNotBeNull();
+        loaded.Status.ShouldBe("Pending");
+        loaded.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task DocumentSession_Patch_On_Null_Nested_Property_AutoInstantiates_Parent()
+    {
+        using var storage = new InMemoryStorageProvider();
+        var options = new StoreOptions { StorageProvider = storage };
+        using var session = new DocumentSession(storage, options);
+
+        var doc = new PatchTestDocumentWithNullableNested { Id = "doc-nested-null", Address = null };
+        session.Store(doc);
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        session.Patch<PatchTestDocumentWithNullableNested>("doc-nested-null")
+            .Set(x => x.Address!.City, "Denver");
+
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        using var session2 = new DocumentSession(storage, options);
+        var loaded = await session2.LoadAsync<PatchTestDocumentWithNullableNested>("doc-nested-null", ct: TestContext.Current.CancellationToken);
+
+        loaded.ShouldNotBeNull();
+        loaded.Address.ShouldNotBeNull();
+        loaded.Address!.City.ShouldBe("Denver");
+    }
+
+    [Fact]
+    public async Task DocumentSession_Patch_Set_On_Enum_Property_From_Raw_String_Value()
+    {
+        using var storage = new InMemoryStorageProvider();
+        var options = new StoreOptions { StorageProvider = storage };
+        using var session = new DocumentSession(storage, options);
+
+        var doc = new PatchTestDocumentWithNullableNested { Id = "doc-enum", Priority = PatchTestPriority.Low };
+        session.Store(doc);
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var patch = (PatchExpression<PatchTestDocumentWithNullableNested>)session.Patch<PatchTestDocumentWithNullableNested>("doc-enum");
+        patch.Operations.Add(new PatchOperationData
+        {
+            Path = "/Data/Priority",
+            Action = PatchAction.Set,
+            Value = "High"
+        });
+
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        using var session2 = new DocumentSession(storage, options);
+        var loaded = await session2.LoadAsync<PatchTestDocumentWithNullableNested>("doc-enum", ct: TestContext.Current.CancellationToken);
+
+        loaded.ShouldNotBeNull();
+        loaded.Priority.ShouldBe(PatchTestPriority.High);
+    }
+
+    [Fact]
+    public async Task DocumentSession_Patch_Append_And_Remove_On_NonList_Collection_Uses_Reflection_Fallback()
+    {
+        using var storage = new InMemoryStorageProvider();
+        var options = new StoreOptions { StorageProvider = storage };
+        using var session = new DocumentSession(storage, options);
+
+        var doc = new PatchTestDocumentWithNullableNested
+        {
+            Id = "doc-hashset",
+            Labels = new HashSet<string> { "existing" }
+        };
+        session.Store(doc);
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        session.Patch<PatchTestDocumentWithNullableNested>("doc-hashset")
+            .Append(x => x.Labels, "added")
+            .Remove(x => x.Labels, "existing");
+
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        using var session2 = new DocumentSession(storage, options);
+        var loaded = await session2.LoadAsync<PatchTestDocumentWithNullableNested>("doc-hashset", ct: TestContext.Current.CancellationToken);
+
+        loaded.ShouldNotBeNull();
+        loaded.Labels.ShouldContain("added");
+        loaded.Labels.ShouldNotContain("existing");
     }
 }
