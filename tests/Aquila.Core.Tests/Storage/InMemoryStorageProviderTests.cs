@@ -130,4 +130,49 @@ public sealed class InMemoryStorageProviderTests
         await Should.ThrowAsync<ArgumentException>(() =>
             provider.ExecuteBatchAsync(new[] { invalidOp }, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task InMemoryStorageProvider_FetchGlobalEventsAsync_Returns_Empty_When_BatchSize_Not_Positive()
+    {
+        var provider = new InMemoryStorageProvider();
+        var streamId = "stream-batch";
+
+        await provider.Events.AppendEventsAsync(streamId, new[]
+        {
+            new EventEnvelope<AccountCreatedEvent>
+            {
+                StreamId = streamId,
+                Version = 1,
+                Data = new AccountCreatedEvent(Guid.NewGuid(), "Alice", 100m)
+            }
+        }, 0, TestContext.Current.CancellationToken);
+
+        var zeroBatch = await provider.Events.FetchGlobalEventsAsync(0, batchSize: 0, ct: TestContext.Current.CancellationToken);
+        zeroBatch.ShouldBeEmpty();
+
+        var negativeBatch = await provider.Events.FetchGlobalEventsAsync(0, batchSize: -5, ct: TestContext.Current.CancellationToken);
+        negativeBatch.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task InMemoryStorageProvider_GetStreamHeaderAsync_Returns_Null_On_Tenant_Mismatch()
+    {
+        var provider = new InMemoryStorageProvider();
+        var streamId = "stream-tenant";
+
+        await provider.Events.AppendEventsAsync(streamId, new[]
+        {
+            new EventEnvelope<AccountCreatedEvent>
+            {
+                StreamId = streamId,
+                Version = 1,
+                TenantId = "tenant-a",
+                Data = new AccountCreatedEvent(Guid.NewGuid(), "Alice", 100m)
+            }
+        }, 0, TestContext.Current.CancellationToken);
+
+        var header = await provider.Events.GetStreamHeaderAsync(streamId, tenantId: "tenant-b", ct: TestContext.Current.CancellationToken);
+
+        header.ShouldBeNull();
+    }
 }

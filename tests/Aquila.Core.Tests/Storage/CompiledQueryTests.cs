@@ -49,6 +49,111 @@ public class ActiveUsersCountQuery : ICompiledQuery<UserDoc, int>
     }
 }
 
+public class NullPlanQuery : ICompiledQuery<UserDoc, UserDoc?>
+{
+    public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs() => null!;
+}
+
+public sealed class QueryHolder
+{
+    public object Query { get; set; } = null!;
+}
+
+public class ClosureViaPropertyQuery : ICompiledQuery<UserDoc, UserDoc?>
+{
+    public string Email { get; set; } = string.Empty;
+
+    public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
+    {
+        var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
+        var holder = new QueryHolder { Query = this };
+        var holderConst = Expression.Constant(holder);
+        var queryProp = Expression.Property(holderConst, nameof(QueryHolder.Query));
+        var typedQueryProp = Expression.Convert(queryProp, typeof(ClosureViaPropertyQuery));
+        var emailProp = Expression.Property(typedQueryProp, nameof(Email));
+
+        var uParam = Expression.Parameter(typeof(UserDoc), "u");
+        var uEmailProp = Expression.Property(uParam, nameof(UserDoc.Email));
+        var equal = Expression.Equal(uEmailProp, emailProp);
+        var predicate = Expression.Lambda<Func<UserDoc, bool>>(equal, uParam);
+
+        var firstOrDefaultCall = Expression.Call(
+            typeof(Queryable),
+            nameof(Queryable.FirstOrDefault),
+            new[] { typeof(UserDoc) },
+            usersParam,
+            predicate);
+
+        return Expression.Lambda<Func<IQueryable<UserDoc>, UserDoc?>>(firstOrDefaultCall, usersParam);
+    }
+}
+
+public static class QueryConstantHelper
+{
+    public static string GetEmail(ClosureViaConstantQuery q) => q.Email;
+}
+
+public class ClosureViaConstantQuery : ICompiledQuery<UserDoc, UserDoc?>
+{
+    public string Email { get; set; } = string.Empty;
+
+    public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
+    {
+        var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
+        var queryConst = Expression.Constant(this, typeof(ClosureViaConstantQuery));
+        var methodInfo = typeof(QueryConstantHelper).GetMethod(nameof(QueryConstantHelper.GetEmail))!;
+        var callExpr = Expression.Call(methodInfo, queryConst);
+
+        var uParam = Expression.Parameter(typeof(UserDoc), "u");
+        var uEmailProp = Expression.Property(uParam, nameof(UserDoc.Email));
+        var equal = Expression.Equal(uEmailProp, callExpr);
+        var predicate = Expression.Lambda<Func<UserDoc, bool>>(equal, uParam);
+
+        var firstOrDefaultCall = Expression.Call(
+            typeof(Queryable),
+            nameof(Queryable.FirstOrDefault),
+            new[] { typeof(UserDoc) },
+            usersParam,
+            predicate);
+
+        return Expression.Lambda<Func<IQueryable<UserDoc>, UserDoc?>>(firstOrDefaultCall, usersParam);
+    }
+}
+
+public sealed class QueryFieldHolder
+{
+    public object Query = null!;
+}
+
+public class ClosureViaFieldQuery : ICompiledQuery<UserDoc, UserDoc?>
+{
+    public string Email { get; set; } = string.Empty;
+
+    public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
+    {
+        var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
+        var holder = new QueryFieldHolder { Query = this };
+        var holderConst = Expression.Constant(holder);
+        var queryField = Expression.Field(holderConst, nameof(QueryFieldHolder.Query));
+        var typedQueryField = Expression.Convert(queryField, typeof(ClosureViaFieldQuery));
+        var emailProp = Expression.Property(typedQueryField, nameof(Email));
+
+        var uParam = Expression.Parameter(typeof(UserDoc), "u");
+        var uEmailProp = Expression.Property(uParam, nameof(UserDoc.Email));
+        var equal = Expression.Equal(uEmailProp, emailProp);
+        var predicate = Expression.Lambda<Func<UserDoc, bool>>(equal, uParam);
+
+        var firstOrDefaultCall = Expression.Call(
+            typeof(Queryable),
+            nameof(Queryable.FirstOrDefault),
+            new[] { typeof(UserDoc) },
+            usersParam,
+            predicate);
+
+        return Expression.Lambda<Func<IQueryable<UserDoc>, UserDoc?>>(firstOrDefaultCall, usersParam);
+    }
+}
+
 public class CompiledQueryTests
 {
     private readonly InMemoryStorageProvider _storage;
@@ -182,5 +287,65 @@ public class CompiledQueryTests
     {
         using var session = new DocumentSession(_storage, _options);
         await Should.ThrowAsync<ArgumentNullException>(() => session.QueryAsync<UserDoc, UserDoc?>(null!));
+    }
+
+    [Fact]
+    public async Task QueryAsync_QueryIsReturnsNull_ThrowsInvalidOperationException()
+    {
+        using var session = new DocumentSession(_storage, _options);
+        var query = new NullPlanQuery();
+
+        await Should.ThrowAsync<InvalidOperationException>(() => session.QueryAsync(query, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task QueryAsync_NestedClosureOverQueryInstance_RebindsParameterViaPropertyInfo()
+    {
+        // Arrange
+        using var session = new DocumentSession(_storage, _options);
+        session.Store(new UserDoc("1", "alice@example.com", 30, true));
+        session.Store(new UserDoc("2", "bob@example.com", 25, false));
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var query = new ClosureViaPropertyQuery { Email = "alice@example.com" };
+
+        // Act
+        var result = await session.QueryAsync(query, TestContext.Current.CancellationToken);
+
+        // Assert
+        result.ShouldNotBeNull();
+        result.Id.ShouldBe("1");
+    }
+
+    [Fact]
+    public async Task QueryAsync_BareConstantReferencingQueryInstance_RebindsViaVisitConstant()
+    {
+        using var session = new DocumentSession(_storage, _options);
+        session.Store(new UserDoc("1", "alice@example.com", 30, true));
+        session.Store(new UserDoc("2", "bob@example.com", 25, false));
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var query = new ClosureViaConstantQuery { Email = "alice@example.com" };
+
+        var result = await session.QueryAsync(query, TestContext.Current.CancellationToken);
+
+        result.ShouldNotBeNull();
+        result.Id.ShouldBe("1");
+    }
+
+    [Fact]
+    public async Task QueryAsync_NestedClosureOverQueryInstance_RebindsParameterViaFieldInfo()
+    {
+        using var session = new DocumentSession(_storage, _options);
+        session.Store(new UserDoc("1", "alice@example.com", 30, true));
+        session.Store(new UserDoc("2", "bob@example.com", 25, false));
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var query = new ClosureViaFieldQuery { Email = "alice@example.com" };
+
+        var result = await session.QueryAsync(query, TestContext.Current.CancellationToken);
+
+        result.ShouldNotBeNull();
+        result.Id.ShouldBe("1");
     }
 }
