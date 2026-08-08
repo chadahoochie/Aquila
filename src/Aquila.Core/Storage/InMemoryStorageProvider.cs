@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Aquila.Core.Events;
@@ -90,8 +91,183 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
             {
                 _documents.TryRemove(key, out _);
             }
+            else if (op.OperationType == StorageOperationType.Patch)
+            {
+                if (_documents.TryGetValue(key, out var rawEnvelope) && rawEnvelope != null)
+                {
+                    ApplyPatchOperations(rawEnvelope, op.PatchOperations);
+                }
+            }
         }
         return Task.CompletedTask;
+    }
+
+    private static void ApplyPatchOperations(object rawEnvelope, List<PatchOperationData> patchOperations)
+    {
+        if (patchOperations == null || patchOperations.Count == 0) return;
+
+        var envType = rawEnvelope.GetType();
+        var versionProp = envType.GetProperty("Version");
+        if (versionProp != null && versionProp.CanWrite)
+        {
+            versionProp.SetValue(rawEnvelope, Guid.NewGuid().ToString());
+        }
+
+        foreach (var patch in patchOperations)
+        {
+            ApplySinglePatch(rawEnvelope, patch);
+        }
+    }
+
+    private static void ApplySinglePatch(object rawEnvelope, PatchOperationData patch)
+    {
+        if (string.IsNullOrWhiteSpace(patch.Path)) return;
+
+        var parts = patch.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return;
+
+        object targetObject = rawEnvelope;
+        PropertyInfo? propInfo = null;
+
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            var targetType = targetObject.GetType();
+            propInfo = targetType.GetProperty(part, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+
+            if (propInfo == null)
+            {
+                return;
+            }
+
+            if (i < parts.Length - 1)
+            {
+                var nextObj = propInfo.GetValue(targetObject);
+                if (nextObj == null)
+                {
+                    if (!propInfo.CanWrite) return;
+                    nextObj = Activator.CreateInstance(propInfo.PropertyType);
+                    if (nextObj == null) return;
+                    propInfo.SetValue(targetObject, nextObj);
+                }
+                targetObject = nextObj;
+            }
+        }
+
+        if (propInfo == null || !propInfo.CanWrite) return;
+
+        switch (patch.Action)
+        {
+            case PatchAction.Set:
+                SetPropertyValue(targetObject, propInfo, patch.Value);
+                break;
+
+            case PatchAction.Increment:
+                IncrementPropertyValue(targetObject, propInfo, patch.Value);
+                break;
+
+            case PatchAction.Append:
+                AppendPropertyValue(targetObject, propInfo, patch.Value);
+                break;
+
+            case PatchAction.Remove:
+                RemovePropertyValue(targetObject, propInfo, patch.Value);
+                break;
+        }
+    }
+
+    private static void SetPropertyValue(object target, PropertyInfo prop, object? value)
+    {
+        if (value == null)
+        {
+            prop.SetValue(target, null);
+            return;
+        }
+
+        var propType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+        if (propType.IsInstanceOfType(value))
+        {
+            prop.SetValue(target, value);
+        }
+        else if (propType.IsEnum)
+        {
+            var enumVal = value is string s ? Enum.Parse(propType, s, true) : Enum.ToObject(propType, value);
+            prop.SetValue(target, enumVal);
+        }
+        else
+        {
+            var converted = Convert.ChangeType(value, propType);
+            prop.SetValue(target, converted);
+        }
+    }
+
+    private static void IncrementPropertyValue(object target, PropertyInfo prop, object? value)
+    {
+        var current = prop.GetValue(target);
+        var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+
+        long currentLong = current != null ? Convert.ToInt64(current) : 0;
+        long incLong = value != null ? Convert.ToInt64(value) : 1;
+        long newLong = currentLong + incLong;
+
+        var converted = Convert.ChangeType(newLong, targetType);
+        prop.SetValue(target, converted);
+    }
+
+    private static void AppendPropertyValue(object target, PropertyInfo prop, object? element)
+    {
+        var collection = prop.GetValue(target);
+
+        if (collection == null)
+        {
+            if (prop.PropertyType.IsGenericType && prop.PropertyType.GetGenericTypeDefinition() == typeof(List<>))
+            {
+                collection = Activator.CreateInstance(prop.PropertyType);
+                prop.SetValue(target, collection);
+            }
+            else if (prop.PropertyType.IsGenericType)
+            {
+                var elemType = prop.PropertyType.GetGenericArguments()[0];
+                var listType = typeof(List<>).MakeGenericType(elemType);
+                collection = Activator.CreateInstance(listType);
+                prop.SetValue(target, collection);
+            }
+            else if (typeof(System.Collections.IList).IsAssignableFrom(prop.PropertyType))
+            {
+                collection = new List<object>();
+                prop.SetValue(target, collection);
+            }
+        }
+
+        if (collection is System.Collections.IList list)
+        {
+            list.Add(element);
+            return;
+        }
+
+        var addMethod = prop.PropertyType.GetMethod("Add");
+        if (addMethod != null && collection != null)
+        {
+            addMethod.Invoke(collection, new[] { element });
+        }
+    }
+
+    private static void RemovePropertyValue(object target, PropertyInfo prop, object? element)
+    {
+        var collection = prop.GetValue(target);
+        if (collection == null) return;
+
+        if (collection is System.Collections.IList list)
+        {
+            list.Remove(element);
+            return;
+        }
+
+        var removeMethod = prop.PropertyType.GetMethod("Remove");
+        if (removeMethod != null)
+        {
+            removeMethod.Invoke(collection, new[] { element });
+        }
     }
 
     // --- EventStorageProvider Implementation ---

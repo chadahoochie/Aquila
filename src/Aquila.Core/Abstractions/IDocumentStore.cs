@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Linq.Expressions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
+using Aquila.Core.Patching;
 using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
 
@@ -70,6 +71,8 @@ public interface IDocumentSession : IQuerySession
     void SoftDelete<T>(string id, string? partitionKey = null) where T : class;
     Task SoftDeleteAsync<T>(T document, CancellationToken ct = default) where T : class;
     Task SoftDeleteAsync<T>(string id, string? partitionKey = null, CancellationToken ct = default) where T : class;
+
+    IPatchExpression<T> Patch<T>(string id, string? partitionKey = null) where T : class;
 
     Task SaveChangesAsync(CancellationToken ct = default);
 }

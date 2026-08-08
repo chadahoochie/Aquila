@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
+using Aquila.Core.Patching;
 using Aquila.Core.Projections;
 using Aquila.Core.Storage;
 
@@ -205,6 +206,28 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
         }
     }
 
+    public IPatchExpression<T> Patch<T>(string id, string? partitionKey = null) where T : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        if (partitionKey != null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
+        }
+
+        var pk = partitionKey ?? typeof(T).Name;
+        var expr = new PatchExpression<T>();
+        _pendingOperations.Add(new StorageOperation
+        {
+            OperationType = StorageOperationType.Patch,
+            Id = id,
+            PartitionKey = pk,
+            DocType = typeof(T).Name,
+            PatchOperations = expr.Operations
+        });
+
+        return expr;
+    }
+
     public async Task SaveChangesAsync(CancellationToken ct = default)
     {
         // 0. Execute deferred operations (e.g. non-blocking soft deletes)
@@ -338,13 +361,5 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
         };
 
         return (envelope.PartitionKey, envelope);
-    }
-
-    private static T SnapshotDocument<T>(T document) where T : class
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        var type = document.GetType();
-        var json = System.Text.Json.JsonSerializer.Serialize(document, type);
-        return (T)System.Text.Json.JsonSerializer.Deserialize(json, type)!;
     }
 }

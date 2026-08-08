@@ -28,7 +28,29 @@ public sealed class DocumentEnvelope<T>
 public enum StorageOperationType
 {
     Upsert,
-    Delete
+    Delete,
+    Patch
+}
+
+/// <summary>
+/// Patch operations supported for partial document updates.
+/// </summary>
+public enum PatchAction
+{
+    Set,
+    Increment,
+    Append,
+    Remove
+}
+
+/// <summary>
+/// Represents a single patch operation with target path, action, and value.
+/// </summary>
+public sealed class PatchOperationData
+{
+    public string Path { get; set; } = string.Empty;
+    public PatchAction Action { get; set; }
+    public object? Value { get; set; }
 }
 
 /// <summary>
@@ -41,6 +63,7 @@ public sealed class StorageOperation
     public string PartitionKey { get; set; } = string.Empty;
     public string DocType { get; set; } = string.Empty;
     public object Document { get; set; } = default!;
+    public List<PatchOperationData> PatchOperations { get; set; } = new();
 }
 
 /// <summary>
