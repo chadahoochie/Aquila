@@ -37,6 +37,7 @@ public interface IEventStore
 public interface IQuerySession : IDisposable, IAsyncDisposable
 {
     string TenantId { get; }
+    TrackingMode TrackingMode { get; }
     IEventStore Events { get; }
     IIdentityMap IdentityMap { get; }
 
@@ -46,6 +47,11 @@ public interface IQuerySession : IDisposable, IAsyncDisposable
 
     IQueryable<T> Query<T>() where T : class;
     Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class;
+
+    Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, CancellationToken ct = default) where TDoc : class, new();
+    Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, string? tenantId, CancellationToken ct = default) where TDoc : class, new();
+    Task<TDoc?> LiveStreamAsync<TDoc>(Guid streamId, CancellationToken ct = default) where TDoc : class, new();
+    Task<TDoc?> LiveStreamAsync<TDoc>(Guid streamId, string? tenantId, CancellationToken ct = default) where TDoc : class, new();
 }
 
 /// <summary>
@@ -76,6 +82,7 @@ public interface IDocumentStore : IDisposable, IAsyncDisposable
     StoreOptions Options { get; }
     Task InitializeAsync(CancellationToken ct = default);
     IQuerySession QuerySession(string? tenantId = null);
-    IDocumentSession OpenSession(string? tenantId = null);
+    IDocumentSession OpenSession(TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null);
+    IDocumentSession OpenSession(string? tenantId);
     IDocumentSession LightweightSession(string? tenantId = null);
 }

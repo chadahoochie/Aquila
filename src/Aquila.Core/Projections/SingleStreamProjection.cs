@@ -17,7 +17,12 @@ public enum ProjectionLifecycle
     /// <summary>
     /// Projection runs asynchronously in the background via Change Feed Processor.
     /// </summary>
-    Async
+    Async,
+
+    /// <summary>
+    /// Projection is evaluated live on-the-fly during query read operations without persistence.
+    /// </summary>
+    Live
 }
 
 /// <summary>
@@ -25,8 +30,9 @@ public enum ProjectionLifecycle
 /// </summary>
 public interface IProjection
 {
-    ProjectionLifecycle Lifecycle { get; }
+    ProjectionLifecycle Lifecycle { get; set; }
     Type AggregateType { get; }
+    string Name => GetType().Name;
     void ApplyEvent(IEvent @event, object aggregate);
 }
 
@@ -39,6 +45,7 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
 
     public ProjectionLifecycle Lifecycle { get; set; } = ProjectionLifecycle.Inline;
     public Type AggregateType => typeof(TAggregate);
+    public string Name => GetType().Name;
 
     protected void CreateEvent<TEvent>(Func<TEvent, TAggregate> creator)
     {

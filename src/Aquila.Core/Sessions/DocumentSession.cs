@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Aquila.Core.Abstractions;
@@ -15,8 +16,13 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
     private readonly List<StorageOperation> _pendingOperations = new();
     private readonly List<Func<CancellationToken, Task>> _pendingDeferredOperations = new();
 
-    public DocumentSession(IAquilaStorageProvider storage, StoreOptions options, string? tenantId = null)
-        : base(storage, options, tenantId)
+    public DocumentSession(IAquilaStorageProvider storage, StoreOptions options, TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
+        : base(storage, options, trackingMode, tenantId)
+    {
+    }
+
+    public DocumentSession(IAquilaStorageProvider storage, StoreOptions options, string? tenantId)
+        : base(storage, options, TrackingMode.DirtyTracking, tenantId)
     {
     }
 
@@ -60,7 +66,11 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             Document = envelope
         });
 
-        InnerIdentityMap.Track(id, document, envelope);
+        if (TrackingMode != TrackingMode.Lightweight)
+        {
+            bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
+            InnerIdentityMap.Track(id, document, envelope, recordSnapshot);
+        }
     }
 
     public void Store<T>(IEnumerable<T> documents) where T : class
@@ -204,6 +214,12 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
         }
         _pendingDeferredOperations.Clear();
 
+        // 0.5 Automatic Dirty Checking for TrackingMode.DirtyTracking
+        if (TrackingMode == TrackingMode.DirtyTracking)
+        {
+            DetectAndQueueDirtyEntities();
+        }
+
         // 1. Flush uncommitted events to storage provider
         var uncommittedEvents = EventStore.UncommittedEvents.ToList();
         if (uncommittedEvents.Count > 0)
@@ -229,28 +245,99 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
 
         foreach (var proj in inlineProjections)
         {
-            foreach (var @evt in uncommittedEvents)
+            if (proj is IMultiStreamProjection multiProj)
             {
-                var aggregateId = @evt.StreamId;
-                var existingAggregate = await LoadAsync<object>(aggregateId, aggregateId, ct) ?? Activator.CreateInstance(proj.AggregateType)!;
-                proj.ApplyEvent(@evt, existingAggregate);
-
-                var envelope = new DocumentEnvelope<object>
+                foreach (var @evt in uncommittedEvents)
                 {
-                    Id = aggregateId,
-                    PartitionKey = aggregateId,
-                    DocType = proj.AggregateType.Name,
-                    TenantId = TenantId,
-                    IsDeleted = false,
-                    Data = existingAggregate
-                };
+                    await multiProj.ProcessEventAsync(this, @evt, ct);
+                }
+            }
+            else
+            {
+                foreach (var @evt in uncommittedEvents)
+                {
+                    var aggregateId = @evt.StreamId;
+                    var existingAggregate = await LoadAsync<object>(aggregateId, aggregateId, ct) ?? Activator.CreateInstance(proj.AggregateType)!;
+                    proj.ApplyEvent(@evt, existingAggregate);
 
-                await Storage.Documents.UpsertDocumentAsync(envelope, ct);
+                    var envelope = new DocumentEnvelope<object>
+                    {
+                        Id = aggregateId,
+                        PartitionKey = aggregateId,
+                        DocType = proj.AggregateType.Name,
+                        TenantId = TenantId,
+                        IsDeleted = false,
+                        Data = existingAggregate
+                    };
+
+                    await Storage.Documents.UpsertDocumentAsync(envelope, ct);
+                }
             }
         }
 
         _pendingOperations.Clear();
         EventStore.ClearUncommittedEvents();
+    }
+
+    private void DetectAndQueueDirtyEntities()
+    {
+        var trackedEntities = InnerIdentityMap.GetTrackedEntities();
+        foreach (var tracked in trackedEntities)
+        {
+            if (tracked.Snapshot == null) continue;
+
+            var currentBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(tracked.Entity, tracked.EntityType);
+
+            if (!currentBytes.AsSpan().SequenceEqual(tracked.Snapshot.AsSpan()))
+            {
+                bool alreadyPending = _pendingOperations.Any(op => op.Id == tracked.Id && op.DocType == tracked.EntityType.Name);
+                if (!alreadyPending)
+                {
+                    var (pk, envelopeObj) = CreateEnvelopeForEntity(tracked);
+                    _pendingOperations.Add(new StorageOperation
+                    {
+                        OperationType = StorageOperationType.Upsert,
+                        Id = tracked.Id,
+                        PartitionKey = pk,
+                        DocType = tracked.EntityType.Name,
+                        Document = envelopeObj
+                    });
+                }
+
+                InnerIdentityMap.UpdateSnapshot(tracked.EntityType, tracked.Id, currentBytes);
+            }
+        }
+    }
+
+    private (string PartitionKey, object EnvelopeObject) CreateEnvelopeForEntity(TrackedEntity tracked)
+    {
+        var method = typeof(DocumentSession).GetMethod(nameof(CreateEnvelopeGeneric), BindingFlags.NonPublic | BindingFlags.Instance)!
+            .MakeGenericMethod(tracked.EntityType);
+
+        return ((string, object))method.Invoke(this, new[] { tracked.Id, tracked.Entity, tracked.Envelope })!;
+    }
+
+    private (string PartitionKey, object EnvelopeObject) CreateEnvelopeGeneric<T>(string id, T entity, object? existingEnvelopeObj) where T : class
+    {
+        var mapping = Options.Schema.For<T>();
+        var pk = mapping.PartitionKeySelector(entity);
+        var docType = typeof(T).Name;
+        var snapshot = SnapshotDocument(entity);
+
+        var existingEnv = existingEnvelopeObj as DocumentEnvelope<T>;
+
+        var envelope = new DocumentEnvelope<T>
+        {
+            Id = id,
+            PartitionKey = existingEnv?.PartitionKey ?? pk,
+            DocType = docType,
+            TenantId = TenantId,
+            IsDeleted = false,
+            Version = Guid.NewGuid().ToString(),
+            Data = snapshot
+        };
+
+        return (envelope.PartitionKey, envelope);
     }
 
     private static T SnapshotDocument<T>(T document) where T : class

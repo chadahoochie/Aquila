@@ -1,5 +1,6 @@
-using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Linq.Expressions;
 using Aquila.Core.Projections;
 using Aquila.Core.Storage;
@@ -101,16 +102,30 @@ public sealed class SchemaPolicy
 
 public sealed class ProjectionRegistration
 {
-    public List<IProjection> Projections { get; } = new();
+    private readonly List<IProjection> _projections = new();
+    private readonly ConcurrentDictionary<Type, IProjection?> _typeCache = new();
+
+    public List<IProjection> Projections => _projections;
 
     public void Add<TProjection>(ProjectionLifecycle lifecycle = ProjectionLifecycle.Inline) where TProjection : IProjection, new()
     {
         var projection = new TProjection();
-        if (projection is SingleStreamProjection<object> single)
-        {
-            single.Lifecycle = lifecycle;
-        }
-        Projections.Add(projection);
+        projection.Lifecycle = lifecycle;
+        Add(projection, lifecycle);
+    }
+
+    public void Add(IProjection projection, ProjectionLifecycle lifecycle = ProjectionLifecycle.Inline)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        projection.Lifecycle = lifecycle;
+        _projections.Add(projection);
+        _typeCache.Clear();
+    }
+
+    public IProjection? ForType(Type aggregateType)
+    {
+        ArgumentNullException.ThrowIfNull(aggregateType);
+        return _typeCache.GetOrAdd(aggregateType, t => _projections.FirstOrDefault(p => p.AggregateType == t));
     }
 }
 

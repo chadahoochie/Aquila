@@ -40,22 +40,23 @@ public sealed class DocumentStore : IDocumentStore
         return new QuerySession(Options.StorageProvider, Options, tenantId);
     }
 
-    public IDocumentSession OpenSession(string? tenantId = null)
+    public IDocumentSession OpenSession(TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
     {
         if (tenantId != null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         }
-        return new DocumentSession(Options.StorageProvider, Options, tenantId);
+        return new DocumentSession(Options.StorageProvider, Options, trackingMode, tenantId);
+    }
+
+    public IDocumentSession OpenSession(string? tenantId)
+    {
+        return OpenSession(TrackingMode.DirtyTracking, tenantId);
     }
 
     public IDocumentSession LightweightSession(string? tenantId = null)
     {
-        if (tenantId != null)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
-        }
-        return new DocumentSession(Options.StorageProvider, Options, tenantId);
+        return OpenSession(TrackingMode.Lightweight, tenantId);
     }
 
     public void Dispose()
