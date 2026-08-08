@@ -11,6 +11,7 @@ public interface IEvent
     string StreamId { get; }
     long Version { get; }
     long Sequence { get; }
+    long GlobalSequence { get; }
     DateTimeOffset Timestamp { get; }
     string EventType { get; }
     object Data { get; }
@@ -34,12 +35,41 @@ public sealed class EventEnvelope<T> : IEvent<T> where T : class
     public string StreamId { get; set; } = string.Empty;
     public long Version { get; set; }
     public long Sequence { get; set; }
+    public long GlobalSequence { get; set; }
     public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
     public string EventType { get; set; } = typeof(T).FullName ?? typeof(T).Name;
     public T Data { get; set; } = default!;
 
     object IEvent.Data => Data;
     public string TenantId { get; set; } = "default";
+}
+
+/// <summary>
+/// Internal extensions for manipulating IEvent objects.
+/// </summary>
+public static class EventExtensions
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Action<IEvent, long>> _globalSequenceSetters = new();
+
+    public static void SetGlobalSequence(this IEvent evt, long globalSequence)
+    {
+        if (evt is null) return;
+        var setter = _globalSequenceSetters.GetOrAdd(evt.GetType(), t =>
+        {
+            var prop = t.GetProperty(nameof(IEvent.GlobalSequence));
+            if (prop != null && prop.CanWrite && prop.SetMethod != null)
+            {
+                var instanceParam = System.Linq.Expressions.Expression.Parameter(typeof(IEvent), "evt");
+                var valueParam = System.Linq.Expressions.Expression.Parameter(typeof(long), "val");
+                var castInstance = System.Linq.Expressions.Expression.Convert(instanceParam, t);
+                var call = System.Linq.Expressions.Expression.Call(castInstance, prop.SetMethod, valueParam);
+                return System.Linq.Expressions.Expression.Lambda<Action<IEvent, long>>(call, instanceParam, valueParam).Compile();
+            }
+            return (_, _) => { };
+        });
+
+        setter(evt, globalSequence);
+    }
 }
 
 /// <summary>

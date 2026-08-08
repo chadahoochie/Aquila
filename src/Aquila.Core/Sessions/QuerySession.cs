@@ -10,6 +10,7 @@ using Newtonsoft.Json;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
+using Aquila.Core.Queries;
 using Aquila.Core.Storage;
 
 namespace Aquila.Core.Sessions;
@@ -18,19 +19,26 @@ public sealed class CoreEventStore : IEventStore
 {
     private readonly IAquilaStorageProvider _storage;
     private readonly string _tenantId;
+    private readonly UpcasterRegistry? _upcasters;
     private readonly List<IEvent> _uncommittedEvents = new();
     private readonly Dictionary<string, long> _streamExpectedVersions = new();
 
     private static readonly ConcurrentDictionary<Type, Func<string, long, object, string, IEvent>> _envelopeFactories = new();
     private static readonly ConcurrentDictionary<(Type AggregateType, Type EventType), Action<object, object>?> _applyMethodCache = new();
 
-    public CoreEventStore(IAquilaStorageProvider storage, string tenantId)
+    public CoreEventStore(IAquilaStorageProvider storage, string tenantId, UpcasterRegistry? upcasters = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
         _storage = storage;
         _tenantId = tenantId;
+        _upcasters = upcasters;
+    }
+
+    public CoreEventStore(IAquilaStorageProvider storage, StoreOptions options, string tenantId)
+        : this(storage, tenantId, options?.Events?.Upcasters)
+    {
     }
 
     public IReadOnlyList<IEvent> UncommittedEvents => _uncommittedEvents;
@@ -104,7 +112,34 @@ public sealed class CoreEventStore : IEventStore
     public async Task<IReadOnlyList<IEvent>> FetchStreamAsync(string streamId, long fromVersion = 0, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
-        return await _storage.Events.FetchEventsAsync(streamId, _tenantId, fromVersion, ct);
+        var events = await _storage.Events.FetchEventsAsync(streamId, _tenantId, fromVersion, ct);
+        if (_upcasters == null || _upcasters.IsEmpty)
+        {
+            return events;
+        }
+
+        var upcastEvents = new List<IEvent>(events.Count);
+        foreach (var evt in events)
+        {
+            upcastEvents.Add(_upcasters.Upcast(evt));
+        }
+        return upcastEvents;
+    }
+
+    public async Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default)
+    {
+        var events = await _storage.Events.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, _tenantId, ct);
+        if (_upcasters == null || _upcasters.IsEmpty)
+        {
+            return events;
+        }
+
+        var upcastEvents = new List<IEvent>(events.Count);
+        foreach (var evt in events)
+        {
+            upcastEvents.Add(_upcasters.Upcast(evt));
+        }
+        return upcastEvents;
     }
 
     public Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new()
@@ -115,10 +150,30 @@ public sealed class CoreEventStore : IEventStore
     public async Task<TAggregate?> AggregateStreamAsync<TAggregate>(string streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
-        var events = await FetchStreamAsync(streamId, 0, ct);
-        if (events.Count == 0) return null;
 
-        var aggregate = new TAggregate();
+        (TAggregate? snapshot, long snapshotVersion) = await _storage.Events.GetSnapshotAsync<TAggregate>(streamId, _tenantId, ct);
+
+        TAggregate? aggregate;
+        long fromVersion;
+
+        if (snapshot != null && snapshotVersion > 0 && (version == 0 || snapshotVersion <= version))
+        {
+            aggregate = snapshot;
+            fromVersion = snapshotVersion + 1;
+        }
+        else
+        {
+            aggregate = null;
+            fromVersion = 0;
+        }
+
+        var events = await FetchStreamAsync(streamId, fromVersion, ct);
+        if (aggregate == null)
+        {
+            if (events.Count == 0) return null;
+            aggregate = new TAggregate();
+        }
+
         foreach (var @evt in events)
         {
             if (version > 0 && @evt.Version > version) break;
@@ -179,7 +234,7 @@ public sealed class CoreEventStore : IEventStore
         return factory(streamId, version, data, tenantId);
     }
 
-    private static void ApplyEventToAggregate(object aggregate, object eventData)
+    internal static void ApplyEventToAggregate(object aggregate, object eventData)
     {
         ArgumentNullException.ThrowIfNull(aggregate);
         ArgumentNullException.ThrowIfNull(eventData);
@@ -260,10 +315,15 @@ public abstract class QuerySessionBase : IQuerySession
     protected readonly IAquilaStorageProvider Storage;
     protected readonly StoreOptions Options;
     protected readonly CoreEventStore EventStore;
+    protected readonly IIdentityMap InnerIdentityMap;
 
     public string TenantId { get; }
+    public TrackingMode TrackingMode { get; }
+    public IIdentityMap IdentityMap => InnerIdentityMap;
+    internal IAquilaStorageProvider StorageProvider => Storage;
+    internal StoreOptions StoreOptions => Options;
 
-    protected QuerySessionBase(IAquilaStorageProvider storage, StoreOptions options, string? tenantId = null)
+    protected QuerySessionBase(IAquilaStorageProvider storage, StoreOptions options, TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(options);
@@ -274,8 +334,15 @@ public abstract class QuerySessionBase : IQuerySession
 
         Storage = storage;
         Options = options;
+        TrackingMode = trackingMode;
         TenantId = tenantId ?? options.DefaultTenantId;
-        EventStore = new CoreEventStore(storage, TenantId);
+        EventStore = new CoreEventStore(storage, options, TenantId);
+        InnerIdentityMap = trackingMode == TrackingMode.Lightweight ? NoIdentityMap.Instance : new IdentityMap();
+    }
+
+    protected QuerySessionBase(IAquilaStorageProvider storage, StoreOptions options, string? tenantId)
+        : this(storage, options, TrackingMode.DirtyTracking, tenantId)
+    {
     }
 
     public IEventStore Events => EventStore;
@@ -297,11 +364,24 @@ public abstract class QuerySessionBase : IQuerySession
             ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
         }
 
+        if (TrackingMode != TrackingMode.Lightweight && InnerIdentityMap.TryGet<T>(id, out var cachedEntity))
+        {
+            return cachedEntity;
+        }
+
         var pk = partitionKey ?? typeof(T).Name;
         var envelope = await Storage.Documents.ReadDocumentAsync<T>(id, pk, ct);
         if (envelope == null || envelope.IsDeleted) return null;
         if (envelope.TenantId != TenantId) return null;
-        return envelope.Data;
+
+        var loadedData = SnapshotDocument(envelope.Data);
+
+        if (TrackingMode != TrackingMode.Lightweight)
+        {
+            bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
+            InnerIdentityMap.Track(id, loadedData, envelope, recordSnapshot);
+        }
+        return loadedData;
     }
 
     public async Task<IReadOnlyList<T>> LoadManyAsync<T>(IEnumerable<string> ids, CancellationToken ct = default) where T : class
@@ -313,14 +393,51 @@ public abstract class QuerySessionBase : IQuerySession
             ArgumentException.ThrowIfNullOrWhiteSpace(id);
         }
 
-        var idSet = idList.ToHashSet();
-        var docType = typeof(T).Name;
+        var results = new List<T>(idList.Count);
+        var missingIds = new List<string>();
 
-        var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
-            x => x.DocType == docType && !x.IsDeleted && x.TenantId == TenantId && idSet.Contains(x.Id),
-            ct);
+        if (TrackingMode != TrackingMode.Lightweight)
+        {
+            foreach (var id in idList)
+            {
+                if (InnerIdentityMap.TryGet<T>(id, out var cached))
+                {
+                    results.Add(cached!);
+                }
+                else
+                {
+                    missingIds.Add(id);
+                }
+            }
+        }
+        else
+        {
+            missingIds.AddRange(idList);
+        }
 
-        return envelopes.Select(e => e.Data).ToList();
+        if (missingIds.Count > 0)
+        {
+            var idSet = missingIds.ToHashSet();
+            var docType = typeof(T).Name;
+
+            var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
+                x => x.TenantId == TenantId && idSet.Contains(x.Id),
+                null,
+                ct);
+
+            foreach (var envelope in envelopes)
+            {
+                var loadedData = SnapshotDocument(envelope.Data);
+                if (TrackingMode != TrackingMode.Lightweight)
+                {
+                    bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
+                    InnerIdentityMap.Track(envelope.Id, loadedData, envelope, recordSnapshot);
+                }
+                results.Add(loadedData);
+            }
+        }
+
+        return results;
     }
 
     [Obsolete("Use QueryAsync<T>() to avoid sync-over-async thread pool starvation.")]
@@ -331,22 +448,146 @@ public abstract class QuerySessionBase : IQuerySession
 
     public async Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class
     {
-        var docType = typeof(T).Name;
-        var compiled = predicate?.Compile();
-        var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
-            x => x.DocType == docType && !x.IsDeleted && x.TenantId == TenantId,
-            ct);
+        var fullPredicate = CombineWithTenantId(predicate);
+        var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(fullPredicate, null, ct);
+        var results = new List<T>();
 
-        if (compiled != null)
+        foreach (var envelope in envelopes)
         {
-            return envelopes.Where(compiled).Select(e => e.Data).ToList();
+            if (TrackingMode != TrackingMode.Lightweight && InnerIdentityMap.TryGet<T>(envelope.Id, out var cached))
+            {
+                results.Add(cached!);
+            }
+            else
+            {
+                var loadedData = SnapshotDocument(envelope.Data);
+                if (TrackingMode != TrackingMode.Lightweight)
+                {
+                    bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
+                    InnerIdentityMap.Track(envelope.Id, loadedData, envelope, recordSnapshot);
+                }
+                results.Add(loadedData);
+            }
         }
-        return envelopes.Select(e => e.Data).ToList();
+
+        return results;
     }
 
-    public void Dispose() => GC.SuppressFinalize(this);
+    private Expression<Func<DocumentEnvelope<T>, bool>> CombineWithTenantId<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate)
+    {
+        var param = Expression.Parameter(typeof(DocumentEnvelope<T>), "x");
+        var tenantCheck = Expression.Equal(
+            Expression.Property(param, nameof(DocumentEnvelope<T>.TenantId)),
+            Expression.Constant(TenantId));
+
+        if (predicate == null)
+        {
+            return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(tenantCheck, param);
+        }
+
+        var visitor = new ParameterReplaceVisitor(predicate.Parameters[0], param);
+        var rewrittenBody = visitor.Visit(predicate.Body);
+
+        var combined = Expression.AndAlso(tenantCheck, rewrittenBody);
+        return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(combined, param);
+    }
+
+    private sealed class ParameterReplaceVisitor : ExpressionVisitor
+    {
+        private readonly ParameterExpression _from;
+        private readonly ParameterExpression _to;
+
+        public ParameterReplaceVisitor(ParameterExpression from, ParameterExpression to)
+        {
+            _from = from;
+            _to = to;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            return node == _from ? _to : base.VisitParameter(node);
+        }
+    }
+
+    public async Task<TResult> QueryAsync<TDoc, TResult>(ICompiledQuery<TDoc, TResult> query, CancellationToken ct = default) where TDoc : class
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var documents = await QueryAsync<TDoc>((Expression<Func<DocumentEnvelope<TDoc>, bool>>?)null, ct);
+        var queryable = documents.AsQueryable();
+
+        return CompiledQueryCache.Execute(queryable, query);
+    }
+
+    public Task<TDoc?> LiveStreamAsync<TDoc>(Guid streamId, CancellationToken ct = default) where TDoc : class, new()
+    {
+        return LiveStreamAsync<TDoc>(streamId.ToString(), null, ct);
+    }
+
+    public Task<TDoc?> LiveStreamAsync<TDoc>(Guid streamId, string? tenantId, CancellationToken ct = default) where TDoc : class, new()
+    {
+        return LiveStreamAsync<TDoc>(streamId.ToString(), tenantId, ct);
+    }
+
+    public Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, CancellationToken ct = default) where TDoc : class, new()
+    {
+        return LiveStreamAsync<TDoc>(streamId, null, ct);
+    }
+
+    public async Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, string? tenantId, CancellationToken ct = default) where TDoc : class, new()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+
+        var targetTenant = tenantId ?? TenantId;
+        var events = await Storage.Events.FetchEventsAsync(streamId, targetTenant, 0, ct);
+        if (events == null || events.Count == 0)
+        {
+            return null;
+        }
+
+        var doc = new TDoc();
+        var projection = Options.Projections.ForType(typeof(TDoc));
+
+        if (projection != null)
+        {
+            foreach (var @evt in events)
+            {
+                projection.ApplyEvent(@evt, doc);
+            }
+        }
+        else
+        {
+            foreach (var @evt in events)
+            {
+                CoreEventStore.ApplyEventToAggregate(doc, @evt);
+            }
+        }
+
+        return doc;
+    }
+
+    protected static T SnapshotDocument<T>(T document) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var type = document.GetType();
+        var json = System.Text.Json.JsonSerializer.Serialize(document, type);
+        return (T)System.Text.Json.JsonSerializer.Deserialize(json, type)!;
+    }
+
+    public void Clear()
+    {
+        InnerIdentityMap.Clear();
+    }
+
+    public void Dispose()
+    {
+        InnerIdentityMap.Clear();
+        GC.SuppressFinalize(this);
+    }
+
     public ValueTask DisposeAsync()
     {
+        InnerIdentityMap.Clear();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
@@ -355,7 +596,12 @@ public abstract class QuerySessionBase : IQuerySession
 public sealed class QuerySession : QuerySessionBase
 {
     public QuerySession(IAquilaStorageProvider storage, StoreOptions options, string? tenantId = null)
-        : base(storage, options, tenantId)
+        : base(storage, options, TrackingMode.DirtyTracking, tenantId)
+    {
+    }
+
+    public QuerySession(IAquilaStorageProvider storage, StoreOptions options, TrackingMode trackingMode, string? tenantId = null)
+        : base(storage, options, trackingMode, tenantId)
     {
     }
 }

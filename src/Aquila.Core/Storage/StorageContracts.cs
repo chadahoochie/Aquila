@@ -28,7 +28,29 @@ public sealed class DocumentEnvelope<T>
 public enum StorageOperationType
 {
     Upsert,
-    Delete
+    Delete,
+    Patch
+}
+
+/// <summary>
+/// Patch operations supported for partial document updates.
+/// </summary>
+public enum PatchAction
+{
+    Set,
+    Increment,
+    Append,
+    Remove
+}
+
+/// <summary>
+/// Represents a single patch operation with target path, action, and value.
+/// </summary>
+public sealed class PatchOperationData
+{
+    public string Path { get; set; } = string.Empty;
+    public PatchAction Action { get; set; }
+    public object? Value { get; set; }
 }
 
 /// <summary>
@@ -41,6 +63,17 @@ public sealed class StorageOperation
     public string PartitionKey { get; set; } = string.Empty;
     public string DocType { get; set; } = string.Empty;
     public object Document { get; set; } = default!;
+    public List<PatchOperationData> PatchOperations { get; set; } = new();
+}
+
+/// <summary>
+/// Options for configuring document queries.
+/// </summary>
+public sealed class QueryOptions
+{
+    public string? PartitionKey { get; set; }
+    public int? MaxItemCount { get; set; }
+    public string? ContinuationToken { get; set; }
 }
 
 /// <summary>
@@ -49,7 +82,7 @@ public sealed class StorageOperation
 public interface IDocumentStorageProvider
 {
     Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
-    Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>> predicate, CancellationToken ct = default) where T : class;
+    Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class;
     Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class;
     Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
     Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default);
@@ -62,7 +95,10 @@ public interface IEventStorageProvider
 {
     Task AppendEventsAsync(string streamId, IEnumerable<IEvent> events, long expectedVersion, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchEventsAsync(string streamId, string? tenantId = null, long fromVersion = 0, CancellationToken ct = default);
+    Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default);
     Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default);
+    Task SaveSnapshotAsync<TAggregate>(string streamId, long version, TAggregate snapshot, string tenantId = "default", CancellationToken ct = default) where TAggregate : class;
+    Task<(TAggregate? Snapshot, long SnapshotVersion)> GetSnapshotAsync<TAggregate>(string streamId, string tenantId = "default", CancellationToken ct = default) where TAggregate : class;
 }
 
 /// <summary>

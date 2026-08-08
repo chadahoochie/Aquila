@@ -74,7 +74,8 @@ public sealed class CosmosIntegrationTests
 
         // 2. Query
         var queryResults = await provider.Documents.QueryDocumentsAsync<IntegrationDocument>(
-            x => x.DocType == nameof(IntegrationDocument) && !x.IsDeleted && x.TenantId == "tenant-int",
+            x => x.TenantId == "tenant-int",
+            null,
             TestContext.Current.CancellationToken);
 
         queryResults.ShouldNotBeEmpty();
