@@ -364,6 +364,55 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         }
     }
 
+    public async Task SaveSnapshotAsync<TAggregate>(string streamId, long version, TAggregate snapshot, string tenantId = "default", CancellationToken ct = default) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var snapshotDoc = new CosmosDocumentEnvelope<TAggregate>
+        {
+            Id = $"$snapshot_{streamId}",
+            PartitionKey = streamId,
+            DocType = "$snapshot",
+            TenantId = tenantId,
+            IsDeleted = false,
+            Version = version.ToString(),
+            Data = snapshot
+        };
+
+        await Container.UpsertItemAsync(snapshotDoc, new PartitionKey(streamId), cancellationToken: ct);
+    }
+
+    public async Task<(TAggregate? Snapshot, long SnapshotVersion)> GetSnapshotAsync<TAggregate>(string streamId, string tenantId = "default", CancellationToken ct = default) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+
+        try
+        {
+            var resp = await Container.ReadItemAsync<CosmosDocumentEnvelope<TAggregate>>(
+                $"$snapshot_{streamId}",
+                new PartitionKey(streamId),
+                cancellationToken: ct);
+
+            if (resp.Resource == null || resp.Resource.IsDeleted) return (null, 0);
+            if (!string.IsNullOrEmpty(tenantId) && resp.Resource.TenantId != tenantId)
+            {
+                return (null, 0);
+            }
+
+            if (long.TryParse(resp.Resource.Version, out var snapshotVersion))
+            {
+                return (resp.Resource.Data, snapshotVersion);
+            }
+
+            return (resp.Resource.Data, 0);
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return (null, 0);
+        }
+    }
+
     public void Dispose() => _client?.Dispose();
     public ValueTask DisposeAsync()
     {

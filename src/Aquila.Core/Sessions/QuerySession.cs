@@ -121,10 +121,30 @@ public sealed class CoreEventStore : IEventStore
     public async Task<TAggregate?> AggregateStreamAsync<TAggregate>(string streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
-        var events = await FetchStreamAsync(streamId, 0, ct);
-        if (events.Count == 0) return null;
 
-        var aggregate = new TAggregate();
+        (TAggregate? snapshot, long snapshotVersion) = await _storage.Events.GetSnapshotAsync<TAggregate>(streamId, _tenantId, ct);
+
+        TAggregate? aggregate;
+        long fromVersion;
+
+        if (snapshot != null && snapshotVersion > 0 && (version == 0 || snapshotVersion <= version))
+        {
+            aggregate = snapshot;
+            fromVersion = snapshotVersion + 1;
+        }
+        else
+        {
+            aggregate = null;
+            fromVersion = 0;
+        }
+
+        var events = await FetchStreamAsync(streamId, fromVersion, ct);
+        if (aggregate == null)
+        {
+            if (events.Count == 0) return null;
+            aggregate = new TAggregate();
+        }
+
         foreach (var @evt in events)
         {
             if (version > 0 && @evt.Version > version) break;

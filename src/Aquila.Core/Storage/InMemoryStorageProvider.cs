@@ -6,6 +6,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 using Aquila.Core.Events;
 using Aquila.Core.Exceptions;
 
@@ -16,6 +17,7 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
     private readonly ConcurrentDictionary<string, object> _documents = new();
     private readonly ConcurrentDictionary<string, EventStreamHeader> _streamHeaders = new();
     private readonly ConcurrentDictionary<string, List<IEvent>> _eventStreams = new();
+    private readonly ConcurrentDictionary<string, (string Json, long SnapshotVersion, string TenantId)> _snapshots = new();
     private long _globalSequence;
 
     public string ProviderName => "InMemory";
@@ -364,6 +366,31 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
             return Task.FromResult<EventStreamHeader?>(null);
         }
         return Task.FromResult(header);
+    }
+
+    public Task SaveSnapshotAsync<TAggregate>(string streamId, long version, TAggregate snapshot, string tenantId = "default", CancellationToken ct = default) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var key = $"{tenantId}:{typeof(TAggregate).FullName}:{streamId}";
+        var json = JsonConvert.SerializeObject(snapshot);
+        _snapshots[key] = (json, version, tenantId);
+        return Task.CompletedTask;
+    }
+
+    public Task<(TAggregate? Snapshot, long SnapshotVersion)> GetSnapshotAsync<TAggregate>(string streamId, string tenantId = "default", CancellationToken ct = default) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+
+        var key = $"{tenantId}:{typeof(TAggregate).FullName}:{streamId}";
+        if (_snapshots.TryGetValue(key, out var entry) && entry.TenantId == tenantId)
+        {
+            var snapshot = JsonConvert.DeserializeObject<TAggregate>(entry.Json);
+            return Task.FromResult<(TAggregate?, long)>((snapshot, entry.SnapshotVersion));
+        }
+
+        return Task.FromResult<(TAggregate?, long)>((null, 0));
     }
 
     public void Dispose() { }
