@@ -1,11 +1,6 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
-using Xunit;
 using Aquila.Core.Abstractions;
-using Aquila.Core.Sessions;
 using Aquila.Cosmos.Extensions;
 
 namespace Aquila.Cosmos.Tests;

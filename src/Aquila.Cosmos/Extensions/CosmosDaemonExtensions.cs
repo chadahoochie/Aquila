@@ -1,4 +1,3 @@
-using System;
 using Microsoft.Extensions.DependencyInjection;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
@@ -19,7 +18,7 @@ namespace Aquila.Cosmos.Extensions
                 return new DocumentStorageProjectionCheckpointStore(store.Options.StorageProvider.Documents);
             });
 
-            services.AddSingleton<CosmosProjectionDaemon>(sp =>
+            services.AddSingleton(sp =>
                 new CosmosProjectionDaemon(
                     sp.GetRequiredService<IDocumentStore>(),
                     sp.GetRequiredService<IProjectionCheckpointStore>(),

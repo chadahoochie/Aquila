@@ -1,14 +1,8 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using Shouldly;
-using Xunit;
-using Aquila.Core.Configuration;
 using Aquila.Core.Events;
 using Aquila.Core.Exceptions;
 using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
-using Aquila.Cosmos.Events;
 using Aquila.Cosmos.Extensions;
 using Aquila.Cosmos.Storage;
 

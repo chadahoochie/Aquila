@@ -1,8 +1,4 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using Shouldly;
-using Xunit;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
 using Aquila.Core.Sessions;

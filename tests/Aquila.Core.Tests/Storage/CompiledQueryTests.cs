@@ -1,14 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Linq.Expressions;
-using System.Threading.Tasks;
 using Aquila.Core.Configuration;
 using Aquila.Core.Queries;
 using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
 using Shouldly;
-using Xunit;
 
 namespace Aquila.Core.Tests;
 

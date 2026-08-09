@@ -1,5 +1,3 @@
-using System;
-
 namespace Aquila.Core.Projections.Daemon;
 
 /// <summary>

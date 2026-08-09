@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
 using Aquila.Core.Patching;
-using Aquila.Core.Storage;
 using Shouldly;
-using Xunit;
 
 namespace Aquila.Core.Tests.Patching;
 
@@ -55,6 +51,6 @@ public class PatchExpressionTests
 
         // Expression with no property access (parts.Count == 0)
         Should.Throw<ArgumentException>(() => expr.Set(x => x, new TestPatchModel()));
-        Should.Throw<ArgumentException>(() => expr.Set<object>(x => (object)x, new object()));
+        Should.Throw<ArgumentException>(() => expr.Set(x => (object)x, new object()));
     }
 }
