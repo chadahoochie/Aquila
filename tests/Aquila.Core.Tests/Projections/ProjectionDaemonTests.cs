@@ -1,3 +1,5 @@
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -322,4 +324,249 @@ public sealed class ProjectionDaemonTests
 
         projection.Name.ShouldBe(nameof(MinimalProjection));
     }
+    [Fact]
+    public async Task RebuildProjectionAsync_WithUnregisteredProjectionNameString_DoesNotThrow()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        await daemon.RebuildProjectionAsync("NonExistentProjection", TestContext.Current.CancellationToken);
+
+        var checkpoint = await checkpointStore.GetCheckpointAsync("NonExistentProjection", TestContext.Current.CancellationToken);
+        checkpoint.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task RebuildProjectionAsync_WithUnregisteredGenericProjectionType_ThrowsInvalidOperationException()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => daemon.RebuildProjectionAsync<UnregisteredProjection>(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task RebuildProjectionAsync_WithSingleStreamProjection_ClearsDocumentsAndReprocesses()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        options.Projections.Add<DaemonSingleStreamAsyncProjection>(ProjectionLifecycle.Async);
+
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        using (var session = store.OpenSession())
+        {
+            session.Events.StartStream<object>("accounts/acc-10", new DaemonAccountOpened("acc-10", "Bob"));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await daemon.CatchUpAsync(TestContext.Current.CancellationToken);
+        (await checkpointStore.GetCheckpointAsync(nameof(DaemonSingleStreamAsyncProjection), TestContext.Current.CancellationToken)).ShouldBe(1);
+
+        // Rebuild single-stream projection
+        await daemon.RebuildProjectionAsync<DaemonSingleStreamAsyncProjection>(TestContext.Current.CancellationToken);
+
+        (await checkpointStore.GetCheckpointAsync(nameof(DaemonSingleStreamAsyncProjection), TestContext.Current.CancellationToken)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task CatchUpAsync_WithNoAsyncProjectionsRegistered_ReturnsEarly()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        await Should.NotThrowAsync(() => daemon.CatchUpAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task CatchUpAsync_WhenCancellationRequested_ExitsEarly()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        options.Projections.Add<TestDaemonAsyncProjection>(ProjectionLifecycle.Async);
+
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await daemon.CatchUpAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenNoAsyncProjections_EntersIdleLoopAndStopsCleanly()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        await daemon.StartAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(150, TestContext.Current.CancellationToken);
+        await daemon.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenExceptionOccursInProcessing_LogsErrorAndRecovers()
+    {
+        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
+        var eventProvider = NSubstitute.Substitute.For<IEventStorageProvider>();
+        storageProvider.Events.Returns(eventProvider);
+        eventProvider.FetchGlobalEventsAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<System.Collections.Generic.IReadOnlyList<IEvent>>(_ => throw new InvalidOperationException("Storage error"));
+
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        options.Projections.Add<TestDaemonAsyncProjection>(ProjectionLifecycle.Async);
+
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        var logger = NSubstitute.Substitute.For<Microsoft.Extensions.Logging.ILogger<ProjectionDaemon>>();
+        using var daemon = new ProjectionDaemon(store, checkpointStore, logger);
+
+        await daemon.StartAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await daemon.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ProcessNextBatchAsync_WhenBatchHasNoNewEvents_ContinuesLoop()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        options.Projections.Add<TestDaemonAsyncProjection>(ProjectionLifecycle.Async);
+
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+
+        using (var session = store.OpenSession())
+        {
+            session.Events.StartStream<object>("orders/ord-1", new DaemonOrderPlaced("ord-1", "cust-1", 10.00m));
+            await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await daemon.CatchUpAsync(TestContext.Current.CancellationToken);
+        await daemon.CatchUpAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ProjectionDaemon_Constructor_And_Methods_Throw_On_Invalid_Arguments()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions { StorageProvider = storageProvider };
+        var store = new DocumentStore(options);
+        var checkpointStore = new InMemoryProjectionCheckpointStore();
+
+        Should.Throw<ArgumentNullException>(() => new ProjectionDaemon((IDocumentStore)null!, checkpointStore));
+        Should.Throw<ArgumentNullException>(() => new ProjectionDaemon(store, null!));
+
+        using var daemon = new ProjectionDaemon(store, checkpointStore);
+        await Should.ThrowAsync<ArgumentException>(() => daemon.StartProjectionAsync(""));
+        await Should.ThrowAsync<ArgumentException>(() => daemon.StopProjectionAsync("  "));
+        await Should.ThrowAsync<ArgumentException>(() => daemon.RebuildProjectionAsync((string)null!));
+    }
+
+    [Fact]
+    public void DaemonExtensions_AddAquilaDaemon_WithCustomCheckpointStoreFactory()
+    {
+        var services = new ServiceCollection();
+        var options = new StoreOptions();
+        services.AddSingleton(options);
+
+        var customCheckpointStore = new InMemoryProjectionCheckpointStore();
+        services.AddAquilaDaemon(sp => customCheckpointStore);
+
+        var provider = services.BuildServiceProvider();
+        var checkpointStore = provider.GetService<IProjectionCheckpointStore>();
+        checkpointStore.ShouldBeSameAs(customCheckpointStore);
+    }
+
+    [Fact]
+    public void DaemonExtensions_AddAquilaDaemon_WithStoreOptionsOnly()
+    {
+        var services = new ServiceCollection();
+        var options = new StoreOptions();
+        services.AddSingleton(options);
+
+        services.AddAquilaDaemon();
+
+        var provider = services.BuildServiceProvider();
+        var checkpointStore = provider.GetService<IProjectionCheckpointStore>();
+        checkpointStore.ShouldBeOfType<DocumentStorageProjectionCheckpointStore>();
+
+        var daemon = provider.GetService<ProjectionDaemon>();
+        daemon.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void DaemonExtensions_AddAquilaDaemon_WithIAquilaStorageProviderOnly()
+    {
+        var services = new ServiceCollection();
+        var storageProvider = new InMemoryStorageProvider();
+        services.AddSingleton<IAquilaStorageProvider>(storageProvider);
+
+        services.AddAquilaDaemon();
+
+        var provider = services.BuildServiceProvider();
+        var checkpointStore = provider.GetService<IProjectionCheckpointStore>();
+        checkpointStore.ShouldBeOfType<DocumentStorageProjectionCheckpointStore>();
+    }
+
+    [Fact]
+    public void DaemonExtensions_Throws_On_Null_Arguments()
+    {
+        IServiceCollection services = null!;
+        Should.Throw<ArgumentNullException>(() => services.AddAquilaDaemon());
+
+        StoreOptions options = null!;
+        Should.Throw<ArgumentNullException>(() => options.AddAsyncDaemon());
+    }
+
+    [Fact]
+    public async Task DocumentStorageProjectionCheckpointStore_ValidatesInputs_And_Handles_Null_Data()
+    {
+        Should.Throw<ArgumentNullException>(() => new DocumentStorageProjectionCheckpointStore(null!));
+
+        var storageProvider = new InMemoryStorageProvider();
+        IProjectionCheckpointStore store = new DocumentStorageProjectionCheckpointStore(storageProvider);
+
+        await Should.ThrowAsync<ArgumentException>(() => store.GetCheckpointAsync(""));
+        await Should.ThrowAsync<ArgumentException>(() => store.SaveCheckpointAsync("  ", 1));
+
+        var val = await store.GetCheckpointAsync("nonexistent", TestContext.Current.CancellationToken);
+        val.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task InMemoryProjectionCheckpointStore_ValidatesInputs()
+    {
+        IProjectionCheckpointStore store = new InMemoryProjectionCheckpointStore();
+        await Should.ThrowAsync<ArgumentException>(() => store.GetCheckpointAsync(""));
+        await Should.ThrowAsync<ArgumentException>(() => store.SaveCheckpointAsync("  ", 1));
+    }
 }
+
+public class UnregisteredProjection : SingleStreamProjection<DaemonAccountAggregate> { }
+
