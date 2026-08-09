@@ -32,6 +32,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     private readonly ILogger<CosmosProjectionDaemon>? _logger;
     private readonly ConcurrentDictionary<string, bool> _stoppedProjections = new();
     private static readonly ConcurrentDictionary<string, Type?> _typeCache = new();
+    private static readonly ConcurrentDictionary<Type, MethodInfo> _processSingleStreamMethodCache = new();
 
     public CosmosProjectionDaemon(
         Container container,
@@ -434,26 +435,40 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
         }
         else
         {
-            foreach (var evt in events)
+            var method = _processSingleStreamMethodCache.GetOrAdd(proj.AggregateType, t =>
+                typeof(CosmosProjectionDaemon).GetMethod(nameof(ProcessSingleStreamEventsAsync), BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .MakeGenericMethod(t));
+
+            var task = (Task)method.Invoke(this, new object[] { session, proj, events, ct })!;
+            await task.ConfigureAwait(false);
+        }
+    }
+
+    private async Task ProcessSingleStreamEventsAsync<TAggregate>(
+        DocumentSession session,
+        IProjection proj,
+        IReadOnlyList<IEvent> events,
+        CancellationToken ct) where TAggregate : class
+    {
+        foreach (var evt in events)
+        {
+            var aggregateId = evt.StreamId;
+            var existingAggregate = await session.LoadAsync<TAggregate>(aggregateId, aggregateId, ct).ConfigureAwait(false)
+                                     ?? (TAggregate)Activator.CreateInstance(typeof(TAggregate))!;
+
+            proj.ApplyEvent(evt, existingAggregate);
+
+            var envelope = new DocumentEnvelope<TAggregate>
             {
-                var aggregateId = evt.StreamId;
-                var existingAggregate = await session.LoadAsync<object>(aggregateId, aggregateId, ct).ConfigureAwait(false)
-                                         ?? Activator.CreateInstance(proj.AggregateType)!;
+                Id = aggregateId,
+                PartitionKey = aggregateId,
+                DocType = typeof(TAggregate).Name,
+                TenantId = session.TenantId,
+                IsDeleted = false,
+                Data = existingAggregate
+            };
 
-                proj.ApplyEvent(evt, existingAggregate);
-
-                var envelope = new DocumentEnvelope<object>
-                {
-                    Id = aggregateId,
-                    PartitionKey = aggregateId,
-                    DocType = proj.AggregateType.Name,
-                    TenantId = session.TenantId,
-                    IsDeleted = false,
-                    Data = existingAggregate
-                };
-
-                await _documentStore.Options.StorageProvider.Documents.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
-            }
+            await _documentStore.Options.StorageProvider.Documents.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
         }
     }
 
