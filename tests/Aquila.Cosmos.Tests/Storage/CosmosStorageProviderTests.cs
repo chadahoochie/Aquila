@@ -468,12 +468,14 @@ public sealed class CosmosStorageProviderTests
     [Fact]
     public async Task FetchEventsAsync_Filters_TenantId_And_FromVersion_And_Deserializes_Json()
     {
-        var rawEvt = new EventEnvelope<object> { StreamId = "s-fetch", Version = 5, TenantId = "tenant-X", Data = "data" };
-        var jsonStr = Newtonsoft.Json.JsonConvert.SerializeObject(rawEvt);
-        var rawJObj = Newtonsoft.Json.Linq.JObject.Parse(jsonStr);
+        var rawEvt1 = new EventEnvelope<object> { StreamId = "s-fetch", Version = 5, TenantId = "tenant-X", Data = "data" };
+        var rawJObj1 = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(rawEvt1));
 
-        var item1 = new CosmosDocumentEnvelope<object> { Id = "e1", PartitionKey = "s-fetch", TenantId = "tenant-X", Data = rawJObj };
-        var item2 = new CosmosDocumentEnvelope<object> { Id = "e2", PartitionKey = "s-fetch", TenantId = "tenant-Y", Data = rawJObj };
+        var rawEvt2 = new EventEnvelope<object> { StreamId = "s-fetch", Version = 6, TenantId = "tenant-Y", Data = "data" };
+        var rawJObj2 = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(rawEvt2));
+
+        var item1 = new CosmosDocumentEnvelope<object> { Id = "e1", PartitionKey = "s-fetch", TenantId = "tenant-X", Data = rawJObj1 };
+        var item2 = new CosmosDocumentEnvelope<object> { Id = "e2", PartitionKey = "s-fetch", TenantId = "tenant-Y", Data = rawJObj2 };
 
         var iterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
         var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<object>>>();
