@@ -1,12 +1,7 @@
-using System;
-using System.Collections.Generic;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json.Linq;
 using Shouldly;
-using Xunit;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
@@ -16,7 +11,6 @@ using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
 using Aquila.Cosmos.Projections;
 using Aquila.Cosmos.Storage;
-using Aquila.Cosmos.Extensions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 

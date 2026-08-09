@@ -1,4 +1,3 @@
-using System;
 using Microsoft.Extensions.DependencyInjection;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
@@ -44,13 +43,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(options);
         services.AddSingleton<IDocumentStore>(sp => new DocumentStore(options));
 
-        services.AddScoped<IQuerySession>(sp =>
+        services.AddScoped(sp =>
         {
             var store = sp.GetRequiredService<IDocumentStore>();
             return store.QuerySession();
         });
 
-        services.AddScoped<IDocumentSession>(sp =>
+        services.AddScoped(sp =>
         {
             var store = sp.GetRequiredService<IDocumentStore>();
             return store.OpenSession();

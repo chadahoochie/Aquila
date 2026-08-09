@@ -1,7 +1,4 @@
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text.Json;
 using Aquila.Core.Storage;
 
@@ -49,13 +46,13 @@ public sealed class IdentityMap : IIdentityMap
 
     public void Track<T>(string id, T entity, DocumentEnvelope<T> envelope) where T : class
     {
-        Track<T>(id, entity, envelope, snapshot: null);
+        Track(id, entity, envelope, snapshot: null);
     }
 
     public void Track<T>(string id, T entity, DocumentEnvelope<T> envelope, bool recordSnapshot) where T : class
     {
         byte[]? snapshot = recordSnapshot ? JsonSerializer.SerializeToUtf8Bytes(entity) : null;
-        Track<T>(id, entity, envelope, snapshot);
+        Track(id, entity, envelope, snapshot);
     }
 
     public void Track<T>(string id, T entity, DocumentEnvelope<T> envelope, byte[]? snapshot) where T : class

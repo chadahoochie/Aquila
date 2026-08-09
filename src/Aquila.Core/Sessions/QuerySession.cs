@@ -1,11 +1,5 @@
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
 using System.Linq.Expressions;
-using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
@@ -519,7 +513,7 @@ public abstract class QuerySessionBase : IQuerySession
     public async Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class
     {
         var fullPredicate = CombineWithTenantId(predicate);
-        var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(fullPredicate, null, ct);
+        var envelopes = await Storage.Documents.QueryDocumentsAsync(fullPredicate, null, ct);
         var results = new List<T>();
 
         foreach (var envelope in envelopes)
@@ -583,7 +577,7 @@ public abstract class QuerySessionBase : IQuerySession
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var documents = await QueryAsync<TDoc>((Expression<Func<DocumentEnvelope<TDoc>, bool>>?)null, ct);
+        var documents = await QueryAsync((Expression<Func<DocumentEnvelope<TDoc>, bool>>?)null, ct);
         var queryable = documents.AsQueryable();
 
         return CompiledQueryCache.Execute(queryable, query);

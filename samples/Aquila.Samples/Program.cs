@@ -1,10 +1,7 @@
-using System;
-using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Projections;
-using Aquila.Core.Sessions;
 using Aquila.Cosmos.Extensions;
 
 namespace Aquila.Samples;

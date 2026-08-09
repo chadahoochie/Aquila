@@ -1,5 +1,3 @@
-using System;
-using System.Threading.Tasks;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 
@@ -17,7 +15,7 @@ public sealed class DocumentStore : IDocumentStore
         Metadata = new StoreMetadata(options);
     }
 
-    public async Task InitializeAsync(System.Threading.CancellationToken ct = default)
+    public async Task InitializeAsync(CancellationToken ct = default)
     {
         if (Options.StorageProvider != null)
         {
