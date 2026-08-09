@@ -104,4 +104,66 @@ public sealed class CosmosQueryPushdownTests
                 r.MaxItemCount == 50),
             Arg.Any<CosmosLinqSerializerOptions>());
     }
+    [Fact]
+    public void CosmosExpressionRewriter_Throws_ArgumentException_When_Predicate_Has_No_Parameters()
+    {
+        var validLambda = Expression.Lambda<Func<DocumentEnvelope<PushdownDoc>, bool>>(
+            Expression.Constant(true),
+            Expression.Parameter(typeof(DocumentEnvelope<PushdownDoc>), "x"));
+
+        var type = validLambda.GetType();
+        while (type != null && type != typeof(object))
+        {
+            var fields = type.GetFields(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+            foreach (var f in fields)
+            {
+                if (f.FieldType == typeof(System.Collections.ObjectModel.ReadOnlyCollection<ParameterExpression>))
+                {
+                    f.SetValue(validLambda, new System.Collections.ObjectModel.ReadOnlyCollection<ParameterExpression>(new List<ParameterExpression>()));
+                }
+                else if (f.FieldType == typeof(object) && f.Name.Contains("par", StringComparison.OrdinalIgnoreCase))
+                {
+                    f.SetValue(validLambda, new System.Collections.ObjectModel.ReadOnlyCollection<ParameterExpression>(new List<ParameterExpression>()));
+                }
+            }
+            type = type.BaseType;
+        }
+
+        Should.Throw<ArgumentException>(() => CosmosExpressionRewriter.Rewrite(validLambda));
+    }
+
+    [Fact]
+    public void CosmosExpressionRewriter_Handles_Different_Parameter_Nodes()
+    {
+        var oldParam = Expression.Parameter(typeof(DocumentEnvelope<PushdownDoc>), "x");
+        var otherParam = Expression.Parameter(typeof(string), "other");
+        var body = Expression.Equal(otherParam, Expression.Constant("val"));
+        var lambda = Expression.Lambda<Func<DocumentEnvelope<PushdownDoc>, bool>>(body, oldParam);
+
+        var rewritten = CosmosExpressionRewriter.Rewrite(lambda);
+        rewritten.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void CosmosExpressionRewriter_Handles_Static_Member_Access()
+    {
+        Expression<Func<DocumentEnvelope<PushdownDoc>, bool>> predicate = x => DateTime.Now.Year > 2020;
+        var rewritten = CosmosExpressionRewriter.Rewrite(predicate);
+        rewritten.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void CosmosExpressionRewriter_Handles_Member_Access_On_Nested_Objects()
+    {
+        Expression<Func<DocumentEnvelope<PushdownDoc>, bool>> predicate = x => x.Data.Name == "nested";
+        var rewritten = CosmosExpressionRewriter.Rewrite(predicate);
+        rewritten.ShouldNotBeNull();
+
+        var compiled = rewritten.Compile();
+        var matching = new CosmosDocumentEnvelope<PushdownDoc> { Data = new PushdownDoc("nested", 1) };
+        var nonMatching = new CosmosDocumentEnvelope<PushdownDoc> { Data = new PushdownDoc("other", 1) };
+
+        compiled(matching).ShouldBeTrue();
+        compiled(nonMatching).ShouldBeFalse();
+    }
 }
