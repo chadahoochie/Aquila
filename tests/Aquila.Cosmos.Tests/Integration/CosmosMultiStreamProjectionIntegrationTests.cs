@@ -161,16 +161,16 @@ public sealed class CosmosMultiStreamProjectionIntegrationTests
         });
 
         await store.InitializeAsync(TestContext.Current.CancellationToken);
-
+        var customer = Guid.NewGuid().ToString("N");
         // Arrange: append events across three different streams for the same customer
         using (var session = store.OpenSession())
         {
             session.Events.StartStream<object>("orders/ord-100",
-                new IntegrationOrderPlaced("ord-100", "cust-A", 250.00m));
+                new IntegrationOrderPlaced("ord-100", customer, 250.00m));
             session.Events.StartStream<object>("payments/pay-500",
-                new IntegrationPaymentReceived("ord-100", "cust-A", 200.00m));
+                new IntegrationPaymentReceived("ord-100", customer, 200.00m));
             session.Events.StartStream<object>("shipping/ship-900",
-                new IntegrationOrderShipped("ord-100", "cust-A"));
+                new IntegrationOrderShipped("ord-100", customer));
 
             await session.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
@@ -178,11 +178,11 @@ public sealed class CosmosMultiStreamProjectionIntegrationTests
         // Assert: the read model aggregates events from all three streams
         using (var session = store.OpenSession())
         {
-            var doc = await session.LoadAsync<IntegrationCustomerSummaryReadModel>("cust-A",
+            var doc = await session.LoadAsync<IntegrationCustomerSummaryReadModel>(customer,
                 ct: TestContext.Current.CancellationToken);
 
             doc.ShouldNotBeNull();
-            doc.CustomerId.ShouldBe("cust-A");
+            doc.CustomerId.ShouldBe(customer);
             doc.TotalAmount.ShouldBe(250.00m);
             doc.TotalPaid.ShouldBe(200.00m);
             doc.OrderCount.ShouldBe(1);
@@ -375,22 +375,26 @@ public sealed class CosmosMultiStreamProjectionIntegrationTests
     [Fact]
     public async Task Async_MultiStreamProjection_CatchUp_Processes_All_Events()
     {
+        // CatchUpAsync's checkpoint counts every event in the container, so this test needs a
+        // container of its own rather than the one shared across the rest of this class.
+        var containerName = $"MultiStreamContainer-{Guid.NewGuid():N}";
         var store = DocumentStore.For(options =>
         {
             options.DefaultTenantId = "integration-tenant";
-            options.UseCosmos(_fixture.Client, "IntegrationDb", "MultiStreamContainer");
+            options.UseCosmos(_fixture.Client, "IntegrationDb", containerName);
             options.Projections.Add<IntegrationAsyncMultiStreamProjection>(ProjectionLifecycle.Async);
         });
 
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
+        var customer = Guid.NewGuid().ToString("N");
         // Arrange: write events across multiple streams
         using (var session = store.OpenSession())
         {
             for (int i = 1; i <= 5; i++)
             {
                 session.Events.StartStream<object>($"orders/{i}",
-                    new IntegrationOrderPlaced($"o{i}", "cust-D", 10.00m));
+                    new IntegrationOrderPlaced($"o{i}", customer, 10.00m));
             }
 
             await session.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -408,7 +412,7 @@ public sealed class CosmosMultiStreamProjectionIntegrationTests
         checkpoint.ShouldBe(5);
 
         using var readSession = store.OpenSession();
-        var readModel = await readSession.LoadAsync<IntegrationCustomerSummaryReadModel>("cust-D",
+        var readModel = await readSession.LoadAsync<IntegrationCustomerSummaryReadModel>(customer,
             ct: TestContext.Current.CancellationToken);
         readModel.ShouldNotBeNull();
         readModel.OrderCount.ShouldBe(5);
@@ -508,10 +512,13 @@ public sealed class CosmosMultiStreamProjectionIntegrationTests
     [Fact]
     public async Task Async_MultiStreamProjection_Rebuild_Clears_And_Reprocesses()
     {
+        // RebuildProjectionAsync's checkpoint counts every event in the container, so this test
+        // needs a container of its own rather than the one shared across the rest of this class.
+        var containerName = $"MultiStreamContainer-{Guid.NewGuid():N}";
         var store = DocumentStore.For(options =>
         {
             options.DefaultTenantId = "integration-tenant";
-            options.UseCosmos(_fixture.Client, "IntegrationDb", "MultiStreamContainer");
+            options.UseCosmos(_fixture.Client, "IntegrationDb", containerName);
             options.Projections.Add<IntegrationAsyncMultiStreamProjection>(ProjectionLifecycle.Async);
         });
 
