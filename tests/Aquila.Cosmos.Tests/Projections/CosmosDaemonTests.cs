@@ -365,11 +365,16 @@ public sealed class CosmosDaemonTests
         var checkpoint = await checkpointStore.GetCheckpointAsync(nameof(CosmosDaemonSingleStreamAsyncProjection), TestContext.Current.CancellationToken);
         checkpoint.ShouldBe(1);
 
-        var envelope = await storageProvider.Documents.ReadDocumentAsync<object>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
-        envelope.ShouldNotBeNull();
-        var aggregate = envelope.Data.ShouldBeOfType<CosmosDaemonAccountAggregate>();
+        using var readSession = store.OpenSession();
+        var aggregate = await readSession.LoadAsync<CosmosDaemonAccountAggregate>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
+        aggregate.ShouldNotBeNull();
         aggregate.AccountId.ShouldBe("acc-1");
         aggregate.Owner.ShouldBe("Alice");
+
+        var envelope = await storageProvider.Documents.ReadDocumentAsync<CosmosDaemonAccountAggregate>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
+        envelope.ShouldNotBeNull();
+        envelope.Data.AccountId.ShouldBe("acc-1");
+        envelope.Data.Owner.ShouldBe("Alice");
     }
 
     [Fact]

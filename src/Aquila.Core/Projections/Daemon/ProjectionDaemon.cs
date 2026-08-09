@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Reflection;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
@@ -25,6 +26,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly ILogger<ProjectionDaemon>? _logger;
     private readonly ConcurrentDictionary<string, bool> _stoppedProjections = new();
+    private static readonly ConcurrentDictionary<Type, MethodInfo> _processSingleStreamMethodCache = new();
 
     public ProjectionDaemon(IDocumentStore documentStore, IProjectionCheckpointStore checkpointStore, ILogger<ProjectionDaemon>? logger = null)
     {
@@ -252,26 +254,40 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
         }
         else
         {
-            foreach (var evt in events)
+            var method = _processSingleStreamMethodCache.GetOrAdd(proj.AggregateType, t =>
+                typeof(ProjectionDaemon).GetMethod(nameof(ProcessSingleStreamEventsAsync), BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .MakeGenericMethod(t));
+
+            var task = (Task)method.Invoke(this, new object[] { session, proj, events, ct })!;
+            await task.ConfigureAwait(false);
+        }
+    }
+
+    private async Task ProcessSingleStreamEventsAsync<TAggregate>(
+        DocumentSession session,
+        IProjection proj,
+        IReadOnlyList<IEvent> events,
+        CancellationToken ct) where TAggregate : class
+    {
+        foreach (var evt in events)
+        {
+            var aggregateId = evt.StreamId;
+            var existingAggregate = await session.LoadAsync<TAggregate>(aggregateId, aggregateId, ct).ConfigureAwait(false)
+                                     ?? (TAggregate)Activator.CreateInstance(typeof(TAggregate))!;
+
+            proj.ApplyEvent(evt, existingAggregate);
+
+            var envelope = new DocumentEnvelope<TAggregate>
             {
-                var aggregateId = evt.StreamId;
-                var existingAggregate = await session.LoadAsync<object>(aggregateId, aggregateId, ct).ConfigureAwait(false)
-                                         ?? Activator.CreateInstance(proj.AggregateType)!;
+                Id = aggregateId,
+                PartitionKey = aggregateId,
+                DocType = typeof(TAggregate).Name,
+                TenantId = session.TenantId,
+                IsDeleted = false,
+                Data = existingAggregate
+            };
 
-                proj.ApplyEvent(evt, existingAggregate);
-
-                var envelope = new DocumentEnvelope<object>
-                {
-                    Id = aggregateId,
-                    PartitionKey = aggregateId,
-                    DocType = proj.AggregateType.Name,
-                    TenantId = session.TenantId,
-                    IsDeleted = false,
-                    Data = existingAggregate
-                };
-
-                await _documentStore.Options.StorageProvider.Documents.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
-            }
+            await _documentStore.Options.StorageProvider.Documents.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
         }
     }
 }
