@@ -178,4 +178,73 @@ public sealed class ProjectionTests
             Arg.Is<DocumentEnvelope<object>>(env => env.Id == userId.ToString() && env.DocType == nameof(UserAggregate)),
             Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public void PropertyCopier_Fallback_Handles_Aggregates_Without_Writable_Properties()
+    {
+        var projection = new EmptyAggregateProjection();
+        var aggregate = new EmptyAggregate();
+        var @event = new EventEnvelope<UserRegisteredEvent>
+        {
+            StreamId = "stream-1",
+            Version = 1,
+            Data = new UserRegisteredEvent(Guid.NewGuid(), "Name", "email@test.com")
+        };
+
+        Should.NotThrow(() => projection.ApplyEvent(@event, aggregate));
+    }
+
+    [Fact]
+    public void ApplyEvent_WhenAggregateIsNotTargetType_ReturnsEarly()
+    {
+        var projection = new UserProjection();
+        var @event = new EventEnvelope<UserRegisteredEvent>
+        {
+            StreamId = "stream-1",
+            Version = 1,
+            Data = new UserRegisteredEvent(Guid.NewGuid(), "Name", "email@test.com")
+        };
+
+        Should.NotThrow(() => projection.ApplyEvent(@event, "InvalidAggregateType"));
+    }
+
+    [Fact]
+    public void ApplyEvent_WhenEventDataIsNull_ReturnsEarly()
+    {
+        var projection = new UserProjection();
+        var aggregate = new UserAggregate();
+        var @event = new EventEnvelope<UserRegisteredEvent>
+        {
+            StreamId = "stream-1",
+            Version = 1,
+            Data = null!
+        };
+
+        Should.NotThrow(() => projection.ApplyEvent(@event, aggregate));
+    }
+
+    [Fact]
+    public void Registration_Methods_Throw_On_Null_Arguments()
+    {
+        var projection = new EmptyAggregateProjection();
+        Should.Throw<ArgumentNullException>(() => projection.ExposeCreateNull());
+        Should.Throw<ArgumentNullException>(() => projection.ExposeProjectNull());
+    }
 }
+
+public sealed class EmptyAggregate
+{
+    public int ReadOnlyProp => 42;
+}
+
+public sealed class EmptyAggregateProjection : SingleStreamProjection<EmptyAggregate>
+{
+    public EmptyAggregateProjection()
+    {
+        CreateEvent<UserRegisteredEvent>(e => new EmptyAggregate());
+    }
+
+    public void ExposeCreateNull() => CreateEvent<UserRegisteredEvent>(null!);
+    public void ExposeProjectNull() => ProjectEvent<UserRegisteredEvent>(null!);
+}
+
