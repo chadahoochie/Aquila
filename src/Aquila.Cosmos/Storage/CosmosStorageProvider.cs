@@ -46,11 +46,103 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
 
     private Container Container => _container ??= _client.GetContainer(_databaseName, _containerName);
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Type?> _eventTypeCache = new();
+
+    // Cosmos round-trips event payloads through JSON, so a plain EventEnvelope<object> deserialization
+    // leaves Data as a JObject/JsonElement instead of the original event record. Projections that
+    // pattern-match on the concrete event type (e.g. MultiStreamProjection.Apply) need it rehydrated.
+    private static void EnsureTypedPayload(EventEnvelope<object> evt)
+    {
+        if (evt.Data == null) return;
+
+        Type? targetType = null;
+        string? rawJson = null;
+
+        if (evt.Data is Newtonsoft.Json.Linq.JToken jToken)
+        {
+            targetType = ResolveEventType(evt.EventType);
+            rawJson = jToken.ToString(Newtonsoft.Json.Formatting.None);
+        }
+        else if (evt.Data is System.Text.Json.JsonElement jsonElement)
+        {
+            targetType = ResolveEventType(evt.EventType);
+            rawJson = jsonElement.GetRawText();
+        }
+
+        if (targetType == null || rawJson == null) return;
+
+        var deserialized = Newtonsoft.Json.JsonConvert.DeserializeObject(rawJson, targetType);
+        if (deserialized != null)
+        {
+            evt.Data = deserialized;
+        }
+    }
+
+    private static Type? ResolveEventType(string eventTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(eventTypeName)) return null;
+
+        return _eventTypeCache.GetOrAdd(eventTypeName, name =>
+        {
+            var type = Type.GetType(name);
+            if (type != null) return type;
+
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                type = asm.GetType(name);
+                if (type != null) return type;
+
+                type = asm.GetTypes().FirstOrDefault(t => t.Name == name || t.FullName == name);
+                if (type != null) return type;
+            }
+
+            return null;
+        });
+    }
+
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         var db = await _client.CreateDatabaseIfNotExistsAsync(_databaseName, cancellationToken: ct);
         var containerResp = await db.Database.CreateContainerIfNotExistsAsync(_containerName, "/pk", cancellationToken: ct);
         _container = containerResp.Container;
+
+        _globalSequence = await GetMaxGlobalSequenceAsync(ct).ConfigureAwait(false);
+    }
+
+    // The container is shared across process instances (e.g. multiple DocumentStores pointed
+    // at the same physical container), so the in-memory counter must be seeded from existing
+    // data instead of always starting at 0, or new events can collide with GlobalSequence
+    // values already persisted by a different instance.
+    private async Task<long> GetMaxGlobalSequenceAsync(CancellationToken ct)
+    {
+        var max = 0L;
+        var queryDef = new QueryDefinition("SELECT * FROM c WHERE c._docType = '$event'");
+        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef);
+        if (iterator == null) return max;
+
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+            foreach (var item in response)
+            {
+                IEvent? @event = item.Data as IEvent;
+                if (@event == null && item.Data != null)
+                {
+                    var rawJson = item.Data.ToString();
+                    if (!string.IsNullOrEmpty(rawJson))
+                    {
+                        @event = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                    }
+                }
+
+                if (@event != null && @event.GlobalSequence > max)
+                {
+                    max = @event.GlobalSequence;
+                }
+            }
+        }
+
+        return max;
     }
 
     // --- DocumentStorageProvider ---
@@ -181,7 +273,13 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
 
-        await Container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, new PartitionKey(partitionKey), cancellationToken: ct);
+        try
+        {
+            await Container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, new PartitionKey(partitionKey), cancellationToken: ct);
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+        }
     }
 
     public async Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default)
@@ -320,7 +418,12 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
                     var rawJson = item.Data.ToString();
                     if (!string.IsNullOrEmpty(rawJson))
                     {
-                        @event = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                        var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                        if (envelope != null)
+                        {
+                            EnsureTypedPayload(envelope);
+                        }
+                        @event = envelope;
                     }
                 }
 
@@ -368,7 +471,12 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
                     var rawJson = item.Data.ToString();
                     if (!string.IsNullOrEmpty(rawJson))
                     {
-                        @event = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                        var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                        if (envelope != null)
+                        {
+                            EnsureTypedPayload(envelope);
+                        }
+                        @event = envelope;
                     }
                 }
 
