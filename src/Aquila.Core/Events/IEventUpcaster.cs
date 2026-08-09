@@ -1,5 +1,3 @@
-using System;
-
 namespace Aquila.Core.Events;
 
 public interface IEventUpcaster

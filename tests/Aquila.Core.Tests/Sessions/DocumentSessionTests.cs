@@ -1,10 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using NSubstitute;
 using Shouldly;
-using Xunit;
 using Aquila.Core.Configuration;
 using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
@@ -102,7 +97,7 @@ public sealed class DocumentSessionTests
             new DocumentEnvelope<SampleDocument> { Id = doc2.Id, PartitionKey = nameof(SampleDocument), DocType = nameof(SampleDocument), TenantId = "default", Data = doc2 }
         };
 
-        docStorage.QueryDocumentsAsync<SampleDocument>(Arg.Any<System.Linq.Expressions.Expression<Func<DocumentEnvelope<SampleDocument>, bool>>>(), Arg.Any<QueryOptions>(), Arg.Any<CancellationToken>())
+        docStorage.QueryDocumentsAsync(Arg.Any<System.Linq.Expressions.Expression<Func<DocumentEnvelope<SampleDocument>, bool>>>(), Arg.Any<QueryOptions>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<DocumentEnvelope<SampleDocument>>>(envelopes));
 
         using var session = new DocumentSession(storage, options);
@@ -238,15 +233,15 @@ public sealed class DocumentSessionTests
         Should.Throw<ArgumentNullException>(() => new DocumentSession(null!, options));
         Should.Throw<ArgumentNullException>(() => new DocumentSession(storage, null!));
 
-        Should.Throw<ArgumentNullException>(() => session.Store<SampleDocument>((SampleDocument)null!));
-        Should.Throw<ArgumentNullException>(() => session.Store<SampleDocument>((IEnumerable<SampleDocument>)null!));
+        Should.Throw<ArgumentNullException>(() => session.Store((SampleDocument)null!));
+        Should.Throw<ArgumentNullException>(() => session.Store((IEnumerable<SampleDocument>)null!));
         Should.Throw<ArgumentException>(() => session.Store(new SampleDocument("id", "title", 10m), partitionKey: "   "));
 
-        Should.Throw<ArgumentNullException>(() => session.Delete<SampleDocument>((SampleDocument)null!));
+        Should.Throw<ArgumentNullException>(() => session.Delete((SampleDocument)null!));
         Should.Throw<ArgumentException>(() => session.Delete<SampleDocument>(""));
         Should.Throw<ArgumentException>(() => session.Delete<SampleDocument>("id", "   "));
 
-        Should.Throw<ArgumentNullException>(() => session.SoftDelete<SampleDocument>((SampleDocument)null!));
+        Should.Throw<ArgumentNullException>(() => session.SoftDelete((SampleDocument)null!));
         Should.Throw<ArgumentException>(() => session.SoftDelete<SampleDocument>("   "));
         Should.Throw<ArgumentException>(() => session.SoftDelete<SampleDocument>("id", "   "));
 
@@ -292,8 +287,8 @@ public sealed class DocumentSessionTests
     [Fact]
     public void AquilaConcurrencyException_InheritsFrom_AquilaException()
     {
-        var ex = new Aquila.Core.Exceptions.AquilaConcurrencyException("doc-1", "1", "2");
-        ex.ShouldBeAssignableTo<Aquila.Core.Exceptions.AquilaException>();
+        var ex = new Exceptions.AquilaConcurrencyException("doc-1", "1", "2");
+        ex.ShouldBeAssignableTo<Exceptions.AquilaException>();
         ex.DocumentId.ShouldBe("doc-1");
         ex.ExpectedVersion.ShouldBe("1");
         ex.ActualVersion.ShouldBe("2");

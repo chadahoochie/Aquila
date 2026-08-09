@@ -1,8 +1,5 @@
-using System;
-using System.Threading.Tasks;
 using Microsoft.Azure.Cosmos;
 using Testcontainers.CosmosDb;
-using Xunit;
 
 namespace Aquila.Cosmos.Tests;
 
@@ -26,11 +23,11 @@ public sealed class CosmosContainerFixture : IAsyncLifetime
         {
             HttpClientFactory = () =>
             {
-                var handler = new System.Net.Http.HttpClientHandler
+                var handler = new HttpClientHandler
                 {
                     ServerCertificateCustomValidationCallback = System.Net.Http.HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
                 };
-                return new System.Net.Http.HttpClient(handler);
+                return new HttpClient(handler);
             },
             ConnectionMode = ConnectionMode.Gateway,
             LimitToEndpoint = true

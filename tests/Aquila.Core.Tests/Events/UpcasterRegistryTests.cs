@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
 using Shouldly;
-using Xunit;
 using Aquila.Core.Events;
 
 namespace Aquila.Core.Tests.Events;

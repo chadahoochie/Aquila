@@ -1,11 +1,6 @@
 using NSubstitute;
-using NSubstitute.ExceptionExtensions;
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
-using Xunit;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
@@ -433,7 +428,7 @@ public sealed class ProjectionDaemonTests
         var eventProvider = NSubstitute.Substitute.For<IEventStorageProvider>();
         storageProvider.Events.Returns(eventProvider);
         eventProvider.FetchGlobalEventsAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns<System.Collections.Generic.IReadOnlyList<IEvent>>(_ => throw new InvalidOperationException("Storage error"));
+            .Returns<IReadOnlyList<IEvent>>(_ => throw new InvalidOperationException("Storage error"));
 
         var options = new StoreOptions();
         options.UseStorageProvider(storageProvider);

@@ -1,12 +1,8 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using Aquila.Core.Configuration;
 using Aquila.Core.Patching;
 using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
 using Shouldly;
-using Xunit;
 
 namespace Aquila.Core.Tests;
 
@@ -81,10 +77,10 @@ public class PatchingTests
     {
         var expr = new PatchExpression<PatchTestDocument>();
 
-        Should.Throw<ArgumentNullException>(() => expr.Set<string>(null!, "test"));
+        Should.Throw<ArgumentNullException>(() => expr.Set(null!, "test"));
         Should.Throw<ArgumentNullException>(() => expr.Increment(null!, 1));
-        Should.Throw<ArgumentNullException>(() => expr.Append<string>(null!, "test"));
-        Should.Throw<ArgumentNullException>(() => expr.Remove<string>(null!, "test"));
+        Should.Throw<ArgumentNullException>(() => expr.Append(null!, "test"));
+        Should.Throw<ArgumentNullException>(() => expr.Remove(null!, "test"));
 
         Should.Throw<ArgumentException>(() => expr.Set(x => x, new PatchTestDocument()));
     }

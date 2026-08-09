@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-
 namespace Aquila.Core.Configuration;
 
 public interface IStoreMetadata

@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using Aquila.Core.Events;
 
 namespace Aquila.Core.Projections;

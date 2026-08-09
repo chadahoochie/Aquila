@@ -1,9 +1,6 @@
-using System;
-using System.Threading.Tasks;
 using Aquila.Core.Events;
 using Aquila.Core.Sessions;
 using Shouldly;
-using Xunit;
 
 namespace Aquila.Core.Tests;
 

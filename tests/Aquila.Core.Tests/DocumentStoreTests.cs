@@ -1,11 +1,7 @@
-using System;
-using System.Threading.Tasks;
 using Shouldly;
-using Xunit;
 using Aquila.Core.Configuration;
 using Aquila.Core.Projections;
 using Aquila.Core.Sessions;
-using Aquila.Core.Storage;
 
 namespace Aquila.Core.Tests;
 

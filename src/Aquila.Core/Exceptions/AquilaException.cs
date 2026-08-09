@@ -1,5 +1,3 @@
-using System;
-
 namespace Aquila.Core.Exceptions;
 
 /// <summary>

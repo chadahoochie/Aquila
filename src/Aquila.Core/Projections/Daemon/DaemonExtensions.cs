@@ -39,7 +39,7 @@ public static class DaemonExtensions
             });
         }
 
-        services.TryAddSingleton<ProjectionDaemon>(sp =>
+        services.TryAddSingleton(sp =>
         {
             var checkpointStore = sp.GetRequiredService<IProjectionCheckpointStore>();
             var logger = sp.GetService<ILogger<ProjectionDaemon>>();
