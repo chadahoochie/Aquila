@@ -176,4 +176,129 @@ public sealed class MultiStreamProjectionTests
         Should.Throw<ArgumentNullException>(() => projection.ApplyEvent(null!, model));
         Should.Throw<ArgumentNullException>(() => projection.ApplyEvent(envelope, null!));
     }
+    [Fact]
+    public async Task ProcessEventAsync_WhenIdentityToStringIsWhitespace_ReturnsEarly()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        using var session = new DocumentSession(storageProvider, options);
+
+        var projection = new WhitespaceIdentityProjection();
+        var evt = new EventEnvelope<TrackedOrderPlaced>
+        {
+            StreamId = "stream-1",
+            Version = 1,
+            Data = new TrackedOrderPlaced("ord-1", "cust-1", 10m)
+        };
+
+        await Should.NotThrowAsync(() => projection.ProcessEventAsync(session, evt, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ProcessEventAsync_WhenPartitionKeySelectorReturnsEmpty_UsesTypeNameFallback()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        using var session = new DocumentSession(storageProvider, options);
+
+        var projection = new NoPkMultiStreamProjection();
+        var evt = new EventEnvelope<TrackedOrderPlaced>
+        {
+            StreamId = "stream-1",
+            Version = 1,
+            Data = new TrackedOrderPlaced("ord-1", "cust-1", 100m)
+        };
+
+        await projection.ProcessEventAsync(session, evt, TestContext.Current.CancellationToken);
+        var doc = await session.LoadAsync<NoPkDoc>("cust-1", ct: TestContext.Current.CancellationToken);
+        doc.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task ProcessEventAsync_DirectInvocation_WhenApplyReturnsFalse_DeletesAndUntracks()
+    {
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        options.UseStorageProvider(storageProvider);
+        using var session = new DocumentSession(storageProvider, options);
+
+        var projection = new TestCustomerMultiStreamProjection();
+
+        // 1. First upsert document
+        var orderEvt = new EventEnvelope<TrackedOrderPlaced>
+        {
+            StreamId = "orders/1",
+            Version = 1,
+            Data = new TrackedOrderPlaced("ord-1", "cust-deact", 50m)
+        };
+        await projection.ProcessEventAsync(session, orderEvt, TestContext.Current.CancellationToken);
+
+        // 2. Direct ProcessEventAsync with tombstone event (Apply returns false)
+        var deactEvt = new EventEnvelope<TrackedCustomerDeactivated>
+        {
+            StreamId = "deactivations/1",
+            Version = 1,
+            Data = new TrackedCustomerDeactivated("cust-deact", "Closed")
+        };
+        await projection.ProcessEventAsync(session, deactEvt, TestContext.Current.CancellationToken);
+
+        var doc = await session.LoadAsync<CustomerSummaryReadModel>("cust-deact", ct: TestContext.Current.CancellationToken);
+        doc.ShouldBeNull();
+    }
+
+    [Fact]
+    public void ApplyEvent_WhenAggregateIsNotTargetDocumentType_ReturnsEarly()
+    {
+        var projection = new TestCustomerMultiStreamProjection();
+        var evt = new EventEnvelope<TrackedOrderPlaced>
+        {
+            StreamId = "stream-1",
+            Version = 1,
+            Data = new TrackedOrderPlaced("ord-1", "cust-1", 50m)
+        };
+
+        Should.NotThrow(() => projection.ApplyEvent(evt, "NotACustomerSummaryReadModel"));
+    }
+
+    [Fact]
+    public async Task ProcessEventAsync_Throws_On_Null_Arguments()
+    {
+        var projection = new TestCustomerMultiStreamProjection();
+        var storageProvider = new InMemoryStorageProvider();
+        var options = new StoreOptions();
+        using var session = new DocumentSession(storageProvider, options);
+        var evt = new EventEnvelope<TrackedOrderPlaced> { StreamId = "1", Version = 1, Data = new TrackedOrderPlaced("1", "1", 10m) };
+
+        await Should.ThrowAsync<ArgumentNullException>(() => projection.ProcessEventAsync(null!, evt, CancellationToken.None));
+        await Should.ThrowAsync<ArgumentNullException>(() => projection.ProcessEventAsync(session, null!, CancellationToken.None));
+    }
 }
+
+public class WhitespaceIdentityProjection : MultiStreamProjection<CustomerSummaryReadModel, object>
+{
+    protected override object Identity(IEvent @event) => "   ";
+    public override bool Apply(IEvent @event, CustomerSummaryReadModel document) => true;
+}
+
+public class NoPkDoc
+{
+    public string Id { get; set; } = string.Empty;
+    public decimal Total { get; set; }
+}
+
+public class NoPkMultiStreamProjection : MultiStreamProjection<NoPkDoc, string>
+{
+    protected override string Identity(IEvent @event) => "cust-1";
+    public override bool Apply(IEvent @event, NoPkDoc document)
+    {
+        if (@event.Data is TrackedOrderPlaced e)
+        {
+            document.Id = e.CustomerId;
+            document.Total += e.Amount;
+        }
+        return true;
+    }
+}
+
