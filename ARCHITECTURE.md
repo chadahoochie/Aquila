@@ -22,8 +22,8 @@ Aquila/
 │   │   ├── Queries/                    # ICompiledQuery<TDoc,TResult>, CompiledQueryCache
 │   │   ├── Sessions/                   # DocumentSession, QuerySession, IIdentityMap, TrackingMode, DocumentStore
 │   │   └── Storage/                    # StorageContracts (SPI), InMemoryStorageProvider, ISqlExpressionTranslator
-│   └── Aquila.Cosmos/                   # Azure Cosmos DB SPI storage provider & Cosmos event store
-│       ├── Storage/                    # CosmosStorageProvider, CosmosDocumentEnvelope<T>, CosmosExpressionRewriter
+│   └── Aquila.Cosmos/                   # Azure Cosmos DB SPI storage providers & Cosmos event store
+│       ├── Storage/                    # CosmosStorageProvider, CosmosDocumentStorageProvider, CosmosEventStorageProvider, CosmosEventTypeResolver, CosmosPartitionKeyHelper, CosmosDocumentEnvelope<T>, CosmosExpressionRewriter, AquilaCosmosJsonSerializer
 │       ├── Events/                     # CosmosEventStore
 │       ├── Projections/                # CosmosProjectionDaemon (Change Feed-aware)
 │       └── Extensions/                 # ServiceCollectionExtensions (AddAquila, UseCosmos), CosmosDaemonExtensions
@@ -39,8 +39,8 @@ Aquila/
 
 | Project | Target Framework | Core Responsibilities |
 | :--- | :--- | :--- |
-| [`Aquila.Core`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core) | `net10.0` | Core abstractions (`IDocumentStore`, `IDocumentSession`, `IQuerySession`, `IEventStore`), session life-cycle management (`TrackingMode`, `IIdentityMap`), Schema/Mapping policies, the Projection engine (`SingleStreamProjection<T>`, `MultiStreamProjection<TDoc,TId>`) and its async `ProjectionDaemon`, the partial-document `Patching` API, `ICompiledQuery` caching, event upcasting/snapshotting, Storage Provider SPI contracts, and the built-in [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs). |
-| [`Aquila.Cosmos`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos) | `net10.0` | Azure Cosmos DB implementation of [`IAquilaStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L71), custom Cosmos document envelopes (`CosmosDocumentEnvelope<T>`), predicate rewriting via `CosmosExpressionRewriter` onto the native Cosmos LINQ provider, the Change Feed-aware `CosmosProjectionDaemon`, and ASP.NET Core DI extensions (`AddAquila`, `UseCosmos`, `AddCosmosDaemon`). |
+| [`Aquila.Core`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core) | `net10.0` | Core abstractions (`IDocumentStore`, `IDocumentSession`, `IQuerySession`, `IEventStore`), session life-cycle management (`TrackingMode`, `IIdentityMap`), Schema/Mapping policies, the Projection engine (`SingleStreamProjection<T>`, `MultiStreamProjection<TDoc,TId>`) and its async `ProjectionDaemon`, the partial-document `Patching` API, `ICompiledQuery` caching, event upcasting/snapshotting, Storage Provider SPI contracts ([`IDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L78), [`IEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L92)), and the built-in [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs). |
+| [`Aquila.Cosmos`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos) | `net10.0` | Azure Cosmos DB implementations of [`IDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L78) (`CosmosDocumentStorageProvider`) and [`IEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L92) (`CosmosEventStorageProvider`), unified composite provider (`CosmosStorageProvider`), custom Cosmos document envelopes (`CosmosDocumentEnvelope<T>`), hierarchical partition key resolution via `CosmosPartitionKeyHelper`, strongly-typed payload resolution via `CosmosEventTypeResolver`, predicate rewriting via `CosmosExpressionRewriter` onto the native Cosmos LINQ provider, the Change Feed-aware `CosmosProjectionDaemon`, and ASP.NET Core DI extensions (`AddAquila`, `UseCosmos`, `AddCosmosDaemon`). |
 | [`Aquila.Samples`](file:///home/chad/source/dotnet/Aquila/samples/Aquila.Samples) | `net10.0` | Runnable demonstration program illustrating document store configuration, event stream appending, aggregate rehydration, and inline projection handling. |
 | [`Aquila.Tests`](file:///home/chad/source/dotnet/Aquila/tests/Aquila.Tests) | `net10.0` | Automated test suite verifying session contracts, storage providers, optimistic concurrency exceptions, projection lifecycles, and security boundary isolation. |
 
@@ -48,17 +48,12 @@ Aquila/
 
 ## 2. Pluggable Storage SPI Design
 
-Aquila decouples business domain semantics (sessions, units-of-work, aggregates, and projections) from physical storage engines through the Service Provider Interface (SPI) defined in [`Aquila.Core.Storage`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs).
+Aquila decouples business domain semantics (sessions, units-of-work, aggregates, and projections) from physical storage engines through the Service Provider Interface (SPI) contracts [`IDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L78) and [`IEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L92) defined in [`Aquila.Core.Storage`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs).
 
 ```mermaid
 classDiagram
-    class IAquilaStorageProvider {
-        +string ProviderName
-        +IDocumentStorageProvider Documents
-        +IEventStorageProvider Events
-        +InitializeAsync(CancellationToken) Task
-    }
     class IDocumentStorageProvider {
+        +string ProviderName
         +ReadDocumentAsync~T~(id, partitionKey) Task~DocumentEnvelope~T~~
         +QueryDocumentsAsync~T~(predicate) Task~IReadOnlyList~DocumentEnvelope~T~~~
         +UpsertDocumentAsync~T~(envelope) Task
@@ -66,27 +61,42 @@ classDiagram
         +ExecuteBatchAsync(operations) Task
     }
     class IEventStorageProvider {
+        +string ProviderName
         +AppendEventsAsync(streamId, events, expectedVersion) Task
         +FetchEventsAsync(streamId, tenantId, fromVersion) Task~IReadOnlyList~IEvent~~
         +GetStreamHeaderAsync(streamId, tenantId) Task~EventStreamHeader~
+        +SaveSnapshotAsync~TAggregate~(streamId, version, snapshot) Task
+        +GetSnapshotAsync~TAggregate~(streamId, tenantId) Task
+    }
+    class CosmosDocumentStorageProvider {
+        +string ProviderName
+        +ReadDocumentAsync~T~(...) Task
+        +QueryDocumentsAsync~T~(...) Task
+        +UpsertDocumentAsync~T~(...) Task
+        +DeleteDocumentAsync~T~(...) Task
+        +ExecuteBatchAsync(...) Task
+    }
+    class CosmosEventStorageProvider {
+        +string ProviderName
+        +AppendEventsAsync(...) Task
+        +FetchEventsAsync(...) Task
+        +GetStreamHeaderAsync(...) Task
+        +SaveSnapshotAsync~TAggregate~(...) Task
+        +GetSnapshotAsync~TAggregate~(...) Task
     }
     class CosmosStorageProvider {
         +string ProviderName
-        +IDocumentStorageProvider Documents
-        +IEventStorageProvider Events
+        -_documents CosmosDocumentStorageProvider
+        -_events CosmosEventStorageProvider
     }
     class InMemoryStorageProvider {
         +string ProviderName
-        +IDocumentStorageProvider Documents
-        +IEventStorageProvider Events
     }
 
-    IAquilaStorageProvider --> IDocumentStorageProvider : Documents
-    IAquilaStorageProvider --> IEventStorageProvider : Events
-    CosmosStorageProvider ..|> IAquilaStorageProvider
+    CosmosDocumentStorageProvider ..|> IDocumentStorageProvider
+    CosmosEventStorageProvider ..|> IEventStorageProvider
     CosmosStorageProvider ..|> IDocumentStorageProvider
     CosmosStorageProvider ..|> IEventStorageProvider
-    InMemoryStorageProvider ..|> IAquilaStorageProvider
     InMemoryStorageProvider ..|> IDocumentStorageProvider
     InMemoryStorageProvider ..|> IEventStorageProvider
 ```
