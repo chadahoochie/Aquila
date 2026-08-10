@@ -39,6 +39,6 @@ public sealed class ServiceCollectionExtensionsTests
 
         var store = provider.GetService<IDocumentStore>();
         store.ShouldNotBeNull();
-        store.Options.StorageProvider.ProviderName.ShouldBe("AzureCosmosDB");
+        store.Options.DocumentStorage.ProviderName.ShouldBe("AzureCosmosDB");
     }
 }

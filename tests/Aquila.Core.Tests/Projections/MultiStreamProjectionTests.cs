@@ -211,7 +211,7 @@ public sealed class MultiStreamProjectionTests
         options.UseStorageProvider(storageProvider);
         options.Projections.Add<TestCustomerMultiStreamProjection>(ProjectionLifecycle.Inline);
 
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         var orderEvent = new TrackedOrderPlaced("ord-100", "cust-A", 250.00m);
         var paymentEvent = new TrackedPaymentReceived("ord-100", "cust-A", 200.00m);
@@ -244,7 +244,7 @@ public sealed class MultiStreamProjectionTests
         options.UseStorageProvider(storageProvider);
         options.Projections.Add<TestCustomerMultiStreamProjection>(ProjectionLifecycle.Inline);
 
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         // Interleaved stream appends for cust-A and cust-B
         session.Events.StartStream<object>("orders/1", new TrackedOrderPlaced("1", "cust-A", 100m));
@@ -279,7 +279,7 @@ public sealed class MultiStreamProjectionTests
         options.UseStorageProvider(storageProvider);
         options.Projections.Add<TestCustomerMultiStreamProjection>(ProjectionLifecycle.Inline);
 
-        using var session1 = new DocumentSession(storageProvider, options);
+        using var session1 = new DocumentSession(storageProvider, storageProvider, options);
 
         // Step 1: Create document via order event
         session1.Events.StartStream<object>("orders/ord-101", new TrackedOrderPlaced("ord-101", "cust-B", 100.00m));
@@ -289,7 +289,7 @@ public sealed class MultiStreamProjectionTests
         docBefore.ShouldNotBeNull();
 
         // Step 2: Append tombstone event (TrackedCustomerDeactivated) in session 2
-        using var session2 = new DocumentSession(storageProvider, options);
+        using var session2 = new DocumentSession(storageProvider, storageProvider, options);
         session2.Events.StartStream<object>("deactivations/deact-1", new TrackedCustomerDeactivated("cust-B", "Account Closed"));
         await session2.SaveChangesAsync(TestContext.Current.CancellationToken);
 
@@ -307,35 +307,35 @@ public sealed class MultiStreamProjectionTests
         options.Projections.Add<TestCustomerMultiStreamProjection>(ProjectionLifecycle.Inline);
 
         // Step 1: Create document
-        using (var session1 = new DocumentSession(storageProvider, options))
+        using (var session1 = new DocumentSession(storageProvider, storageProvider, options))
         {
             session1.Events.StartStream<object>("orders/1", new TrackedOrderPlaced("1", "cust-C", 100m));
             await session1.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Step 2: Deactivate (tombstone)
-        using (var session2 = new DocumentSession(storageProvider, options))
+        using (var session2 = new DocumentSession(storageProvider, storageProvider, options))
         {
             session2.Events.StartStream<object>("deact/1", new TrackedCustomerDeactivated("cust-C", "Closed"));
             await session2.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Verify deleted
-        using (var verifySession = new DocumentSession(storageProvider, options))
+        using (var verifySession = new DocumentSession(storageProvider, storageProvider, options))
         {
             var deletedDoc = await verifySession.LoadAsync<CustomerSummaryReadModel>("cust-C", ct: TestContext.Current.CancellationToken);
             deletedDoc.ShouldBeNull();
         }
 
         // Step 3: New event for cust-C
-        using (var session3 = new DocumentSession(storageProvider, options))
+        using (var session3 = new DocumentSession(storageProvider, storageProvider, options))
         {
             session3.Events.StartStream<object>("orders/2", new TrackedOrderPlaced("2", "cust-C", 500m));
             await session3.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Assert: Document cust-C is recreated with fresh state
-        using (var finalSession = new DocumentSession(storageProvider, options))
+        using (var finalSession = new DocumentSession(storageProvider, storageProvider, options))
         {
             var doc = await finalSession.LoadAsync<CustomerSummaryReadModel>("cust-C", ct: TestContext.Current.CancellationToken);
             doc.ShouldNotBeNull();
@@ -354,7 +354,7 @@ public sealed class MultiStreamProjectionTests
         options.UseStorageProvider(storageProvider);
         options.Projections.Add<TestCustomerMultiStreamProjection>(ProjectionLifecycle.Inline);
 
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         // Append events that result in null or empty/whitespace identity
         session.Events.StartStream<object>("unrelated/1", new MultiStreamUnrelatedEvent("ignored"));
@@ -387,7 +387,7 @@ public sealed class MultiStreamProjectionTests
         var projection = new TestCustomerMultiStreamProjection();
         var storageProvider = new InMemoryStorageProvider();
         var options = new StoreOptions();
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
         var envelope = new EventEnvelope<TrackedOrderPlaced>
         {
             StreamId = "stream-1",
@@ -468,7 +468,7 @@ public sealed class MultiStreamProjectionTests
         options.UseStorageProvider(storageProvider);
         options.Projections.Add<TestLiveCustomerMultiStreamProjection>(ProjectionLifecycle.Live);
 
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         session.Events.StartStream<object>("orders/1", new TrackedOrderPlaced("1", "cust-Live", 200m));
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -487,7 +487,7 @@ public sealed class MultiStreamProjectionTests
         options.Schema.For<CustomPkReadModel>().PartitionKey(x => x.TenantGroup);
         options.Projections.Add<TestCustomPkMultiStreamProjection>(ProjectionLifecycle.Inline);
 
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         session.Events.StartStream<object>("events/1", new CustomPkEvent("doc-1", "Group-A", 99.5m));
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -505,7 +505,7 @@ public sealed class MultiStreamProjectionTests
         var storageProvider = new InMemoryStorageProvider();
         var options = new StoreOptions();
         options.UseStorageProvider(storageProvider);
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         var projection = new WhitespaceIdentityProjection();
         var evt = new EventEnvelope<TrackedOrderPlaced>
@@ -524,7 +524,7 @@ public sealed class MultiStreamProjectionTests
         var storageProvider = new InMemoryStorageProvider();
         var options = new StoreOptions();
         options.UseStorageProvider(storageProvider);
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         var projection = new NoPkMultiStreamProjection();
         var evt = new EventEnvelope<TrackedOrderPlaced>
@@ -545,7 +545,7 @@ public sealed class MultiStreamProjectionTests
         var storageProvider = new InMemoryStorageProvider();
         var options = new StoreOptions();
         options.UseStorageProvider(storageProvider);
-        using var session = new DocumentSession(storageProvider, options);
+        using var session = new DocumentSession(storageProvider, storageProvider, options);
 
         var projection = new TestCustomerMultiStreamProjection();
 

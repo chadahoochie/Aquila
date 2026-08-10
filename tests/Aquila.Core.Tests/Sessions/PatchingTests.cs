@@ -89,8 +89,8 @@ public class PatchingTests
     public void DocumentSession_Patch_Throws_On_Invalid_Arguments()
     {
         using var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         Should.Throw<ArgumentException>(() => session.Patch<PatchTestDocument>(""));
         Should.Throw<ArgumentException>(() => session.Patch<PatchTestDocument>("   "));
@@ -101,8 +101,8 @@ public class PatchingTests
     public async Task DocumentSession_Patch_Registers_StorageOperation_And_Executes_InMemory()
     {
         using var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var doc = new PatchTestDocument
         {
@@ -127,7 +127,7 @@ public class PatchingTests
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Verify: Load document in a new session to confirm persistence in InMemoryStorageProvider
-        using var session2 = new DocumentSession(storage, options);
+        using var session2 = new DocumentSession(storage, storage, options);
         var loaded = await session2.LoadAsync<PatchTestDocument>("doc-1", ct: TestContext.Current.CancellationToken);
 
         loaded.ShouldNotBeNull();
@@ -143,8 +143,8 @@ public class PatchingTests
     public async Task DocumentSession_Patch_Supports_Custom_PartitionKey()
     {
         using var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var doc = new PatchTestDocument
         {
@@ -162,7 +162,7 @@ public class PatchingTests
 
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        using var session2 = new DocumentSession(storage, options);
+        using var session2 = new DocumentSession(storage, storage, options);
         var loaded = await session2.LoadAsync<PatchTestDocument>("doc-custom-pk", partitionKey: "custom-pk", ct: TestContext.Current.CancellationToken);
 
         loaded.ShouldNotBeNull();
@@ -174,8 +174,8 @@ public class PatchingTests
     public async Task DocumentSession_Patch_Targeting_Nonexistent_Property_Is_A_Silent_NoOp()
     {
         using var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var doc = new PatchTestDocument { Id = "doc-noop", Status = "Pending", Count = 1 };
         session.Store(doc);
@@ -191,7 +191,7 @@ public class PatchingTests
 
         await Should.NotThrowAsync(() => session.SaveChangesAsync(TestContext.Current.CancellationToken));
 
-        using var session2 = new DocumentSession(storage, options);
+        using var session2 = new DocumentSession(storage, storage, options);
         var loaded = await session2.LoadAsync<PatchTestDocument>("doc-noop", ct: TestContext.Current.CancellationToken);
         loaded.ShouldNotBeNull();
         loaded.Status.ShouldBe("Pending");
@@ -202,8 +202,8 @@ public class PatchingTests
     public async Task DocumentSession_Patch_On_Null_Nested_Property_AutoInstantiates_Parent()
     {
         using var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var doc = new PatchTestDocumentWithNullableNested { Id = "doc-nested-null", Address = null };
         session.Store(doc);
@@ -214,7 +214,7 @@ public class PatchingTests
 
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        using var session2 = new DocumentSession(storage, options);
+        using var session2 = new DocumentSession(storage, storage, options);
         var loaded = await session2.LoadAsync<PatchTestDocumentWithNullableNested>("doc-nested-null", ct: TestContext.Current.CancellationToken);
 
         loaded.ShouldNotBeNull();
@@ -226,8 +226,8 @@ public class PatchingTests
     public async Task DocumentSession_Patch_Set_On_Enum_Property_From_Raw_String_Value()
     {
         using var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var doc = new PatchTestDocumentWithNullableNested { Id = "doc-enum", Priority = PatchTestPriority.Low };
         session.Store(doc);
@@ -243,7 +243,7 @@ public class PatchingTests
 
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        using var session2 = new DocumentSession(storage, options);
+        using var session2 = new DocumentSession(storage, storage, options);
         var loaded = await session2.LoadAsync<PatchTestDocumentWithNullableNested>("doc-enum", ct: TestContext.Current.CancellationToken);
 
         loaded.ShouldNotBeNull();
@@ -254,8 +254,8 @@ public class PatchingTests
     public async Task DocumentSession_Patch_Append_And_Remove_On_NonList_Collection_Uses_Reflection_Fallback()
     {
         using var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var doc = new PatchTestDocumentWithNullableNested
         {
@@ -271,7 +271,7 @@ public class PatchingTests
 
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        using var session2 = new DocumentSession(storage, options);
+        using var session2 = new DocumentSession(storage, storage, options);
         var loaded = await session2.LoadAsync<PatchTestDocumentWithNullableNested>("doc-hashset", ct: TestContext.Current.CancellationToken);
 
         loaded.ShouldNotBeNull();

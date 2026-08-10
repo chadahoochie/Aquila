@@ -32,10 +32,10 @@ public static class DaemonExtensions
                 var options = sp.GetService<StoreOptions>();
                 if (options != null)
                 {
-                    return new DocumentStorageProjectionCheckpointStore(options.StorageProvider.Documents);
+                    return new DocumentStorageProjectionCheckpointStore(options.DocumentStorage);
                 }
-                var provider = sp.GetRequiredService<IAquilaStorageProvider>();
-                return new DocumentStorageProjectionCheckpointStore(provider.Documents);
+                var provider = sp.GetRequiredService<IDocumentStorageProvider>();
+                return new DocumentStorageProjectionCheckpointStore(provider);
             });
         }
 

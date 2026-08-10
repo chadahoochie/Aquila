@@ -38,7 +38,7 @@ public sealed class CosmosPatchTests
             }
         };
 
-        await _provider.Documents.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).PatchItemAsync<CosmosDocumentEnvelope<object>>(
             "doc-1",
@@ -64,7 +64,7 @@ public sealed class CosmosPatchTests
             }
         };
 
-        await _provider.Documents.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).PatchItemAsync<CosmosDocumentEnvelope<object>>(
             "doc-2",
@@ -90,7 +90,7 @@ public sealed class CosmosPatchTests
             }
         };
 
-        await _provider.Documents.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).PatchItemAsync<CosmosDocumentEnvelope<object>>(
             "doc-3",
@@ -116,7 +116,7 @@ public sealed class CosmosPatchTests
             }
         };
 
-        await _provider.Documents.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).PatchItemAsync<CosmosDocumentEnvelope<object>>(
             "doc-4",
@@ -145,7 +145,7 @@ public sealed class CosmosPatchTests
             }
         };
 
-        await _provider.Documents.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).PatchItemAsync<CosmosDocumentEnvelope<object>>(
             "doc-5",
@@ -170,7 +170,7 @@ public sealed class CosmosPatchTests
             PatchOperations = new List<PatchOperationData>()
         };
 
-        await _provider.Documents.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(new[] { op }, TestContext.Current.CancellationToken);
 
         await _mockContainer.DidNotReceiveWithAnyArgs().PatchItemAsync<CosmosDocumentEnvelope<object>>(
             default!, default, default, cancellationToken: TestContext.Current.CancellationToken);

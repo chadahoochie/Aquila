@@ -6,7 +6,7 @@ using Aquila.Core.Storage;
 
 namespace Aquila.Cosmos.Storage;
 
-public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentStorageProvider, IEventStorageProvider
+public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStorageProvider
 {
     private readonly CosmosClient _client;
     private Container _container = null!;
@@ -18,8 +18,6 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
     private readonly CosmosEventStorageProvider _events;
 
     public string ProviderName => "AzureCosmosDB";
-    public IDocumentStorageProvider Documents => _documents;
-    public IEventStorageProvider Events => _events;
 
     public CosmosStorageProvider(string connectionString, string databaseName = "AquilaDB", string containerName = "Documents", ICosmosEventTypeResolver? eventTypeResolver = null)
     {

@@ -157,7 +157,7 @@ public class CompiledQueryTests
     public CompiledQueryTests()
     {
         _storage = new InMemoryStorageProvider();
-        _options = new StoreOptions { StorageProvider = _storage };
+        _options = new StoreOptions { DocumentStorage = _storage, EventStorage = _storage };
         CompiledQueryCache.Clear();
     }
 
@@ -165,7 +165,7 @@ public class CompiledQueryTests
     public async Task QueryAsync_WithCompiledQuery_ExecutesAndReturnsResult()
     {
         // Arrange
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         session.Store(new UserDoc("2", "bob@example.com", 25, false));
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -185,7 +185,7 @@ public class CompiledQueryTests
     public async Task QueryAsync_MultipleInvocations_CachesExpressionPlanAndBindsParameters()
     {
         // Arrange
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         session.Store(new UserDoc("2", "bob@example.com", 25, true));
         session.Store(new UserDoc("3", "charlie@example.com", 35, false));
@@ -220,7 +220,7 @@ public class CompiledQueryTests
     public async Task QueryAsync_CollectionResult_ExecutesFilteringCorrectly()
     {
         // Arrange
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         session.Store(new UserDoc("2", "bob@example.com", 20, true));
         session.Store(new UserDoc("3", "charlie@example.com", 35, false));
@@ -240,7 +240,7 @@ public class CompiledQueryTests
     public async Task QueryAsync_ScalarResult_ReturnsCorrectValue()
     {
         // Arrange
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         session.Store(new UserDoc("2", "bob@example.com", 20, true));
         session.Store(new UserDoc("3", "charlie@example.com", 35, false));
@@ -259,7 +259,7 @@ public class CompiledQueryTests
     public async Task CompiledQueryCache_Clear_ResetsCache()
     {
         // Arrange
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
@@ -280,14 +280,14 @@ public class CompiledQueryTests
     [Fact]
     public async Task QueryAsync_NullQuery_ThrowsArgumentNullException()
     {
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         await Should.ThrowAsync<ArgumentNullException>(() => session.QueryAsync<UserDoc, UserDoc?>(null!));
     }
 
     [Fact]
     public async Task QueryAsync_QueryIsReturnsNull_ThrowsInvalidOperationException()
     {
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         var query = new NullPlanQuery();
 
         await Should.ThrowAsync<InvalidOperationException>(() => session.QueryAsync(query, TestContext.Current.CancellationToken));
@@ -297,7 +297,7 @@ public class CompiledQueryTests
     public async Task QueryAsync_NestedClosureOverQueryInstance_RebindsParameterViaPropertyInfo()
     {
         // Arrange
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         session.Store(new UserDoc("2", "bob@example.com", 25, false));
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -315,7 +315,7 @@ public class CompiledQueryTests
     [Fact]
     public async Task QueryAsync_BareConstantReferencingQueryInstance_RebindsViaVisitConstant()
     {
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         session.Store(new UserDoc("2", "bob@example.com", 25, false));
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -331,7 +331,7 @@ public class CompiledQueryTests
     [Fact]
     public async Task QueryAsync_NestedClosureOverQueryInstance_RebindsParameterViaFieldInfo()
     {
-        using var session = new DocumentSession(_storage, _options);
+        using var session = new DocumentSession(_storage, _storage, _options);
         session.Store(new UserDoc("1", "alice@example.com", 30, true));
         session.Store(new UserDoc("2", "bob@example.com", 25, false));
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);

@@ -11,7 +11,7 @@ namespace Aquila.Core.Sessions;
 
 public sealed class CoreEventStore : IEventStore
 {
-    private readonly IAquilaStorageProvider _storage;
+    private readonly IEventStorageProvider _storage;
     private readonly string _tenantId;
     private readonly UpcasterRegistry? _upcasters;
     private readonly List<IEvent> _uncommittedEvents = new();
@@ -23,7 +23,7 @@ public sealed class CoreEventStore : IEventStore
     private readonly Func<(string? CorrelationId, string? CausationId, IReadOnlyDictionary<string, object> Headers)>? _headerProvider;
 
     public CoreEventStore(
-        IAquilaStorageProvider storage,
+        IEventStorageProvider storage,
         string tenantId,
         UpcasterRegistry? upcasters = null,
         Func<(string? CorrelationId, string? CausationId, IReadOnlyDictionary<string, object> Headers)>? headerProvider = null)
@@ -38,7 +38,7 @@ public sealed class CoreEventStore : IEventStore
     }
 
     public CoreEventStore(
-        IAquilaStorageProvider storage,
+        IEventStorageProvider storage,
         StoreOptions options,
         string tenantId,
         Func<(string? CorrelationId, string? CausationId, IReadOnlyDictionary<string, object> Headers)>? headerProvider = null)
@@ -158,7 +158,7 @@ public sealed class CoreEventStore : IEventStore
     public async Task<IReadOnlyList<IEvent>> FetchStreamAsync(string streamId, long fromVersion = 0, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
-        var events = await _storage.Events.FetchEventsAsync(streamId, _tenantId, fromVersion, ct);
+        var events = await _storage.FetchEventsAsync(streamId, _tenantId, fromVersion, ct);
         if (_upcasters == null || _upcasters.IsEmpty)
         {
             return events;
@@ -174,7 +174,7 @@ public sealed class CoreEventStore : IEventStore
 
     public async Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default)
     {
-        var events = await _storage.Events.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, _tenantId, ct);
+        var events = await _storage.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, _tenantId, ct);
         if (_upcasters == null || _upcasters.IsEmpty)
         {
             return events;
@@ -197,7 +197,7 @@ public sealed class CoreEventStore : IEventStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
 
-        (TAggregate? snapshot, long snapshotVersion) = await _storage.Events.GetSnapshotAsync<TAggregate>(streamId, _tenantId, ct);
+        (TAggregate? snapshot, long snapshotVersion) = await _storage.GetSnapshotAsync<TAggregate>(streamId, _tenantId, ct);
 
         TAggregate? aggregate;
         long fromVersion;
@@ -358,7 +358,8 @@ public sealed class CoreEventStore : IEventStore
 
 public abstract class QuerySessionBase : IQuerySession
 {
-    protected readonly IAquilaStorageProvider Storage;
+    public IDocumentStorageProvider DocumentStorage { get; }
+    public IEventStorageProvider EventStorage { get; }
     protected readonly StoreOptions Options;
     protected readonly CoreEventStore EventStore;
     protected readonly IIdentityMap InnerIdentityMap;
@@ -366,7 +367,6 @@ public abstract class QuerySessionBase : IQuerySession
     public string TenantId { get; }
     public TrackingMode TrackingMode { get; }
     public IIdentityMap IdentityMap => InnerIdentityMap;
-    internal IAquilaStorageProvider StorageProvider => Storage;
     internal StoreOptions StoreOptions => Options;
 
     public string? CorrelationId { get; set; }
@@ -387,25 +387,27 @@ public abstract class QuerySessionBase : IQuerySession
         _headers[key] = value;
     }
 
-    protected QuerySessionBase(IAquilaStorageProvider storage, StoreOptions options, TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
+    protected QuerySessionBase(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage, StoreOptions options, TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
     {
-        ArgumentNullException.ThrowIfNull(storage);
+        ArgumentNullException.ThrowIfNull(documentStorage);
+        ArgumentNullException.ThrowIfNull(eventStorage);
         ArgumentNullException.ThrowIfNull(options);
         if (tenantId != null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         }
 
-        Storage = storage;
+        DocumentStorage = documentStorage;
+        EventStorage = eventStorage;
         Options = options;
         TrackingMode = trackingMode;
         TenantId = tenantId ?? options.DefaultTenantId;
-        EventStore = new CoreEventStore(storage, options, TenantId, () => (CorrelationId, CausationId, Headers));
+        EventStore = new CoreEventStore(eventStorage, options, TenantId, () => (CorrelationId, CausationId, Headers));
         InnerIdentityMap = trackingMode == TrackingMode.Lightweight ? NoIdentityMap.Instance : new IdentityMap();
     }
 
-    protected QuerySessionBase(IAquilaStorageProvider storage, StoreOptions options, string? tenantId)
-        : this(storage, options, TrackingMode.DirtyTracking, tenantId)
+    protected QuerySessionBase(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage, StoreOptions options, string? tenantId)
+        : this(documentStorage, eventStorage, options, TrackingMode.DirtyTracking, tenantId)
     {
     }
 
@@ -434,7 +436,7 @@ public abstract class QuerySessionBase : IQuerySession
         }
 
         var pk = partitionKey ?? typeof(T).Name;
-        var envelope = await Storage.Documents.ReadDocumentAsync<T>(id, pk, ct);
+        var envelope = await DocumentStorage.ReadDocumentAsync<T>(id, pk, ct);
         if (envelope == null || envelope.IsDeleted) return null;
         if (envelope.TenantId != TenantId) return null;
 
@@ -482,9 +484,8 @@ public abstract class QuerySessionBase : IQuerySession
         if (missingIds.Count > 0)
         {
             var idSet = missingIds.ToHashSet();
-            var docType = typeof(T).Name;
-
-            var envelopes = await Storage.Documents.QueryDocumentsAsync<T>(
+            
+            var envelopes = await DocumentStorage.QueryDocumentsAsync<T>(
                 x => x.TenantId == TenantId && idSet.Contains(x.Id),
                 null,
                 ct);
@@ -513,9 +514,13 @@ public abstract class QuerySessionBase : IQuerySession
     public async Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class
     {
         var fullPredicate = CombineWithTenantId(predicate);
-        var envelopes = await Storage.Documents.QueryDocumentsAsync(fullPredicate, null, ct);
-        var results = new List<T>();
+        var envelopes = await DocumentStorage.QueryDocumentsAsync(fullPredicate, null, ct);
+        return TrackAndUnwrap(envelopes);
+    }
 
+    private IReadOnlyList<T> TrackAndUnwrap<T>(IEnumerable<DocumentEnvelope<T>> envelopes) where T : class
+    {
+        var results = new List<T>();
         foreach (var envelope in envelopes)
         {
             if (TrackingMode != TrackingMode.Lightweight && InnerIdentityMap.TryGet<T>(envelope.Id, out var cached))
@@ -603,7 +608,7 @@ public abstract class QuerySessionBase : IQuerySession
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
 
         var targetTenant = tenantId ?? TenantId;
-        var events = await Storage.Events.FetchEventsAsync(streamId, targetTenant, 0, ct);
+        var events = await EventStorage.FetchEventsAsync(streamId, targetTenant, 0, ct);
         if (events == null || events.Count == 0)
         {
             return null;
@@ -659,13 +664,13 @@ public abstract class QuerySessionBase : IQuerySession
 
 public sealed class QuerySession : QuerySessionBase
 {
-    public QuerySession(IAquilaStorageProvider storage, StoreOptions options, string? tenantId = null)
-        : base(storage, options, TrackingMode.DirtyTracking, tenantId)
+    public QuerySession(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage, StoreOptions options, string? tenantId = null)
+        : base(documentStorage, eventStorage, options, TrackingMode.DirtyTracking, tenantId)
     {
     }
 
-    public QuerySession(IAquilaStorageProvider storage, StoreOptions options, TrackingMode trackingMode, string? tenantId = null)
-        : base(storage, options, trackingMode, tenantId)
+    public QuerySession(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage, StoreOptions options, TrackingMode trackingMode, string? tenantId = null)
+        : base(documentStorage, eventStorage, options, trackingMode, tenantId)
     {
     }
 }

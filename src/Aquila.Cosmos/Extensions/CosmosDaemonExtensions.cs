@@ -15,7 +15,7 @@ namespace Aquila.Cosmos.Extensions
             services.AddSingleton<IProjectionCheckpointStore>(sp =>
             {
                 var store = sp.GetRequiredService<IDocumentStore>();
-                return new DocumentStorageProjectionCheckpointStore(store.Options.StorageProvider.Documents);
+                return new DocumentStorageProjectionCheckpointStore(store.Options.DocumentStorage);
             });
 
             services.AddSingleton(sp =>

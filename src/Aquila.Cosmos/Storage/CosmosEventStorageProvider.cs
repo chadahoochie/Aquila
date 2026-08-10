@@ -27,6 +27,11 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
     private Container Container => _containerProvider();
 
+    public string ProviderName => "AzureCosmosDB";
+    public Task InitializeAsync(CancellationToken ct = default) => InitializeSequenceAsync(ct);
+    public void Dispose() { }
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
     public async Task InitializeSequenceAsync(CancellationToken ct = default)
     {
         _globalSequence = await GetMaxGlobalSequenceAsync(ct).ConfigureAwait(false);

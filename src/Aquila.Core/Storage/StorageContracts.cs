@@ -75,8 +75,10 @@ public sealed class QueryOptions
 /// <summary>
 /// Provider interface for underlying document database persistence.
 /// </summary>
-public interface IDocumentStorageProvider
+public interface IDocumentStorageProvider : IDisposable, IAsyncDisposable
 {
+    string ProviderName { get; }
+    Task InitializeAsync(CancellationToken ct = default);
     Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
     Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class;
     Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class;
@@ -87,23 +89,14 @@ public interface IDocumentStorageProvider
 /// <summary>
 /// Provider interface for underlying event store stream persistence.
 /// </summary>
-public interface IEventStorageProvider
+public interface IEventStorageProvider : IDisposable, IAsyncDisposable
 {
+    string ProviderName { get; }
+    Task InitializeAsync(CancellationToken ct = default);
     Task AppendEventsAsync(string streamId, IEnumerable<IEvent> events, long expectedVersion, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchEventsAsync(string streamId, string? tenantId = null, long fromVersion = 0, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default);
     Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default);
     Task SaveSnapshotAsync<TAggregate>(string streamId, long version, TAggregate snapshot, string tenantId = "default", CancellationToken ct = default) where TAggregate : class;
     Task<(TAggregate? Snapshot, long SnapshotVersion)> GetSnapshotAsync<TAggregate>(string streamId, string tenantId = "default", CancellationToken ct = default) where TAggregate : class;
-}
-
-/// <summary>
-/// Combined pluggable storage provider interface for Aquila.
-/// </summary>
-public interface IAquilaStorageProvider : IDisposable, IAsyncDisposable
-{
-    string ProviderName { get; }
-    IDocumentStorageProvider Documents { get; }
-    IEventStorageProvider Events { get; }
-    Task InitializeAsync(CancellationToken ct = default);
 }

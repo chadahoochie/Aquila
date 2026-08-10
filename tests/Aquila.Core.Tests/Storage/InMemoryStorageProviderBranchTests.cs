@@ -83,8 +83,8 @@ public class InMemoryStorageProviderBranchTests
         var streamId = "stream-branch";
 
         // 1. Empty events list returns Task.CompletedTask
-        await provider.Events.AppendEventsAsync(streamId, Array.Empty<IEvent>(), 0, ct);
-        var headerNull = await provider.Events.GetStreamHeaderAsync(streamId, ct: ct);
+        await provider.AppendEventsAsync(streamId, Array.Empty<IEvent>(), 0, ct);
+        var headerNull = await provider.GetStreamHeaderAsync(streamId, ct: ct);
         headerNull.ShouldBeNull();
 
         // 2. Append event with null TenantId (defaults to "default") and pre-existing GlobalSequence
@@ -97,14 +97,14 @@ public class InMemoryStorageProviderBranchTests
             Data = new AccountCreatedEvent(Guid.NewGuid(), "Alice", 100m)
         };
 
-        await provider.Events.AppendEventsAsync(streamId, new IEvent[] { evt1 }, expectedVersion: -1, ct: ct);
+        await provider.AppendEventsAsync(streamId, new IEvent[] { evt1 }, expectedVersion: -1, ct: ct);
 
-        var header = await provider.Events.GetStreamHeaderAsync(streamId, ct: ct);
+        var header = await provider.GetStreamHeaderAsync(streamId, ct: ct);
         header.ShouldNotBeNull();
         header.TenantId.ShouldBe("default");
         header.Version.ShouldBe(1);
 
-        var fetched = await provider.Events.FetchEventsAsync(streamId, ct: ct);
+        var fetched = await provider.FetchEventsAsync(streamId, ct: ct);
         fetched.Count.ShouldBe(1);
         fetched[0].GlobalSequence.ShouldBe(999);
 
@@ -117,9 +117,9 @@ public class InMemoryStorageProviderBranchTests
             Data = new MoneyDepositedEvent(Guid.NewGuid(), 50m)
         };
 
-        await provider.Events.AppendEventsAsync("stream-custom-tenant", new IEvent[] { evt2 }, expectedVersion: -1, ct: ct);
+        await provider.AppendEventsAsync("stream-custom-tenant", new IEvent[] { evt2 }, expectedVersion: -1, ct: ct);
 
-        var headerCustom = await provider.Events.GetStreamHeaderAsync("stream-custom-tenant", ct: ct);
+        var headerCustom = await provider.GetStreamHeaderAsync("stream-custom-tenant", ct: ct);
         headerCustom.ShouldNotBeNull();
         headerCustom.TenantId.ShouldBe("tenant-custom");
     }
@@ -146,26 +146,26 @@ public class InMemoryStorageProviderBranchTests
             Data = new MoneyDepositedEvent(Guid.NewGuid(), 50m)
         };
 
-        await provider.Events.AppendEventsAsync(streamId, new IEvent[] { evt1, evt2 }, expectedVersion: 0, ct: ct);
+        await provider.AppendEventsAsync(streamId, new IEvent[] { evt1, evt2 }, expectedVersion: 0, ct: ct);
 
         // FetchEventsAsync fromVersion filter
-        var eventsFromV2 = await provider.Events.FetchEventsAsync(streamId, tenantId: "tenant-a", fromVersion: 2, ct: ct);
+        var eventsFromV2 = await provider.FetchEventsAsync(streamId, tenantId: "tenant-a", fromVersion: 2, ct: ct);
         eventsFromV2.Count.ShouldBe(1);
         eventsFromV2[0].Version.ShouldBe(2);
 
         // FetchEventsAsync tenant mismatch
-        var eventsMismatch = await provider.Events.FetchEventsAsync(streamId, tenantId: "tenant-b", fromVersion: 1, ct: ct);
+        var eventsMismatch = await provider.FetchEventsAsync(streamId, tenantId: "tenant-b", fromVersion: 1, ct: ct);
         eventsMismatch.ShouldBeEmpty();
 
         // FetchEventsAsync non-existent stream
-        var eventsMissing = await provider.Events.FetchEventsAsync("non-existent-stream", ct: ct);
+        var eventsMissing = await provider.FetchEventsAsync("non-existent-stream", ct: ct);
         eventsMissing.ShouldBeEmpty();
 
         // FetchGlobalEventsAsync tenant filter
-        var globalTenantA = await provider.Events.FetchGlobalEventsAsync(0, batchSize: 100, tenantId: "tenant-a", ct: ct);
+        var globalTenantA = await provider.FetchGlobalEventsAsync(0, batchSize: 100, tenantId: "tenant-a", ct: ct);
         globalTenantA.Count.ShouldBe(2);
 
-        var globalTenantB = await provider.Events.FetchGlobalEventsAsync(0, batchSize: 100, tenantId: "tenant-b", ct: ct);
+        var globalTenantB = await provider.FetchGlobalEventsAsync(0, batchSize: 100, tenantId: "tenant-b", ct: ct);
         globalTenantB.ShouldBeEmpty();
     }
 

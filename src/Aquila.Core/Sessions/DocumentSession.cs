@@ -13,13 +13,13 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
     private readonly List<StorageOperation> _pendingOperations = new();
     private readonly List<Func<CancellationToken, Task>> _pendingDeferredOperations = new();
 
-    public DocumentSession(IAquilaStorageProvider storage, StoreOptions options, TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
-        : base(storage, options, trackingMode, tenantId)
+    public DocumentSession(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage, StoreOptions options, TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
+        : base(documentStorage, eventStorage, options, trackingMode, tenantId)
     {
     }
 
-    public DocumentSession(IAquilaStorageProvider storage, StoreOptions options, string? tenantId)
-        : base(storage, options, TrackingMode.DirtyTracking, tenantId)
+    public DocumentSession(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage, StoreOptions options, string? tenantId)
+        : base(documentStorage, eventStorage, options, TrackingMode.DirtyTracking, tenantId)
     {
     }
 
@@ -247,14 +247,14 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             foreach (var group in groupedByStream)
             {
                 var expectedVersion = EventStore.StreamExpectedVersions.TryGetValue(group.Key, out var exp) ? exp : -1;
-                await Storage.Events.AppendEventsAsync(group.Key, group, expectedVersion, ct);
+                await EventStorage.AppendEventsAsync(group.Key, group, expectedVersion, ct);
             }
         }
 
         // 2. Flush pending storage operations
         if (_pendingOperations.Count > 0)
         {
-            await Storage.Documents.ExecuteBatchAsync(_pendingOperations.ToList(), ct);
+            await DocumentStorage.ExecuteBatchAsync(_pendingOperations.ToList(), ct);
         }
 
         // 3. Process inline projections
@@ -313,7 +313,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             .GetMethod(nameof(IDocumentStorageProvider.UpsertDocumentAsync))!
             .MakeGenericMethod(proj.AggregateType);
 
-        var upsertTask = (Task)upsertMethod.Invoke(Storage.Documents, new object[] { envelope, ct })!;
+        var upsertTask = (Task)upsertMethod.Invoke(DocumentStorage, new object[] { envelope, ct })!;
         await upsertTask.ConfigureAwait(false);
     }
 

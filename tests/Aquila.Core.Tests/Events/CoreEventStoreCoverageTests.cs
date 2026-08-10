@@ -33,11 +33,8 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public async Task AggregateStreamAsync_SnapshotScenarios()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
         var eventStorage = Substitute.For<IEventStorageProvider>();
-        storage.Events.Returns(eventStorage);
-
-        var eventStore = new CoreEventStore(storage, "tenant1");
+        var eventStore = new CoreEventStore(eventStorage, "tenant1");
         var streamId = "stream-snapshot";
 
         // Scenario 1: Snapshot exists, version > 0, requested version == 0 -> uses snapshot, fetches events from snapshotVersion + 1
@@ -85,11 +82,8 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public async Task AggregateStreamAsync_StreamNotFound_ReturnsNull()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
         var eventStorage = Substitute.For<IEventStorageProvider>();
-        storage.Events.Returns(eventStorage);
-
-        var eventStore = new CoreEventStore(storage, "tenant1");
+        var eventStore = new CoreEventStore(eventStorage, "tenant1");
         var streamId = "non-existent-stream";
 
         eventStorage.GetSnapshotAsync<SimpleAggregate>(streamId, "tenant1", Arg.Any<CancellationToken>())
@@ -104,11 +98,8 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public async Task AggregateStreamAsync_MultiBranch_ReplayConditions()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
         var eventStorage = Substitute.For<IEventStorageProvider>();
-        storage.Events.Returns(eventStorage);
-
-        var eventStore = new CoreEventStore(storage, "tenant1");
+        var eventStore = new CoreEventStore(eventStorage, "tenant1");
         var streamId = "stream-multi";
 
         eventStorage.GetSnapshotAsync<SimpleAggregate>(streamId, "tenant1", Arg.Any<CancellationToken>())
@@ -135,11 +126,8 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public async Task AggregateStreamAsync_Applies_JObject_And_JsonString_And_IgnoresUnmatchedEvents()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
         var eventStorage = Substitute.For<IEventStorageProvider>();
-        storage.Events.Returns(eventStorage);
-
-        var eventStore = new CoreEventStore(storage, "tenant1");
+        var eventStore = new CoreEventStore(eventStorage, "tenant1");
 
         // 1. JObject payload matching string event type name
         var streamJObj = "stream-jobj";
@@ -203,7 +191,7 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public void Append_MultipleAppends_And_HeaderMerging()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
+        var storage = Substitute.For<IEventStorageProvider>();
 
         var headerProvider = new Func<(string?, string?, IReadOnlyDictionary<string, object>)>(() =>
             ("corr-provider", "cause-provider", new Dictionary<string, object> { ["H1"] = "V1", ["H2"] = "ProviderV2" }));
@@ -240,7 +228,7 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public void ApplyHeaders_WithoutHeaderProvider_UsesExistingEventHeaders()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
+        var storage = Substitute.For<IEventStorageProvider>();
         var eventStore = new CoreEventStore(storage, "tenant1");
 
         var existingEvt = new EventEnvelope<SimpleEvent>
@@ -262,7 +250,7 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public void ClearUncommittedEvents_ClearsEventsAndExpectedVersions()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
+        var storage = Substitute.For<IEventStorageProvider>();
         var eventStore = new CoreEventStore(storage, "tenant1");
 
         eventStore.Append("stream-1", 1, new SimpleEvent(1, "E1"));
@@ -278,10 +266,10 @@ public class CoreEventStoreCoverageTests
     [Fact]
     public async Task CoreEventStore_Constructors_And_Overloads()
     {
-        var storage = Substitute.For<IAquilaStorageProvider>();
-        var options = new StoreOptions { StorageProvider = storage };
+        var eventStorage = Substitute.For<IEventStorageProvider>();
+        var options = new StoreOptions { EventStorage = eventStorage };
 
-        var store1 = new CoreEventStore(storage, options, "tenant1");
+        var store1 = new CoreEventStore(eventStorage, options, "tenant1");
         store1.UncommittedEvents.Count.ShouldBe(0);
 
         var guidStreamId = Guid.NewGuid();

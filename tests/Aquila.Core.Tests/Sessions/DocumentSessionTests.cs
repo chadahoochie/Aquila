@@ -18,13 +18,12 @@ public sealed class DocumentSessionTests
 {
     [Theory, AutoNSubstituteData]
     public async Task LoadAsync_Delegates_To_Storage_Provider(
-        IAquilaStorageProvider storage,
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         SampleDocument document)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var envelope = new DocumentEnvelope<SampleDocument>
         {
             Id = document.Id,
@@ -37,7 +36,7 @@ public sealed class DocumentSessionTests
         docStorage.ReadDocumentAsync<SampleDocument>(document.Id, nameof(SampleDocument), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<DocumentEnvelope<SampleDocument>?>(envelope));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         var result = await session.LoadAsync<SampleDocument>(document.Id, ct: TestContext.Current.CancellationToken);
@@ -51,27 +50,25 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task LoadAsync_Guid_Delegates_To_String_Overload(
-        IAquilaStorageProvider storage,
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         Guid guidId)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        var document = new SampleDocument(guidId.ToString(), "Guid Doc", 49.99m);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var envelope = new DocumentEnvelope<SampleDocument>
         {
             Id = guidId.ToString(),
             PartitionKey = nameof(SampleDocument),
             DocType = nameof(SampleDocument),
             TenantId = "default",
-            Data = document
+            Data = new SampleDocument(guidId.ToString(), "Guid Document", 99.99m)
         };
 
         docStorage.ReadDocumentAsync<SampleDocument>(guidId.ToString(), nameof(SampleDocument), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<DocumentEnvelope<SampleDocument>?>(envelope));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         var result = await session.LoadAsync<SampleDocument>(guidId, ct: TestContext.Current.CancellationToken);
@@ -83,14 +80,13 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task LoadManyAsync_Loads_Multiple_Documents(
-        IAquilaStorageProvider storage,
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         SampleDocument doc1,
         SampleDocument doc2)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var envelopes = new List<DocumentEnvelope<SampleDocument>>
         {
             new DocumentEnvelope<SampleDocument> { Id = doc1.Id, PartitionKey = nameof(SampleDocument), DocType = nameof(SampleDocument), TenantId = "default", Data = doc1 },
@@ -100,7 +96,7 @@ public sealed class DocumentSessionTests
         docStorage.QueryDocumentsAsync(Arg.Any<System.Linq.Expressions.Expression<Func<DocumentEnvelope<SampleDocument>, bool>>>(), Arg.Any<QueryOptions>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<DocumentEnvelope<SampleDocument>>>(envelopes));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         var results = await session.LoadManyAsync<SampleDocument>(new[] { doc1.Id, doc2.Id }, ct: TestContext.Current.CancellationToken);
@@ -111,14 +107,13 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task SaveChangesAsync_Executes_Pending_Store_Operations(
-        IAquilaStorageProvider storage,
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         SampleDocument document)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         session.Store(document);
@@ -132,13 +127,12 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task Store_Enumerable_Stores_All_Documents(
-        IAquilaStorageProvider storage,
-        IDocumentStorageProvider docStorage)
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
         var documents = new List<SampleDocument>
         {
             new SampleDocument("doc-1", "Title 1", 10.00m),
@@ -157,13 +151,12 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task Store_Snapshots_Document_State_Isolating_Post_Store_Mutations(
-        IAquilaStorageProvider storage,
-        IDocumentStorageProvider docStorage)
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         var doc = new MutableSampleDocument { Id = "doc-100", Title = "Original Title" };
 
@@ -183,14 +176,13 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task Delete_By_Document_Queues_Delete_Operation(
-        IAquilaStorageProvider storage,
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         SampleDocument document)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         session.Delete(document);
@@ -204,14 +196,13 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task SoftDeleteAsync_By_Document_Queues_And_Persists_SoftDelete(
-        IAquilaStorageProvider storage,
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         SampleDocument document)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         await session.SoftDeleteAsync(document, TestContext.Current.CancellationToken);
@@ -225,13 +216,15 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public void DocumentSession_InputValidation_ThrowsExceptions_OnInvalidParameters(
-        IAquilaStorageProvider storage)
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage)
     {
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
-        Should.Throw<ArgumentNullException>(() => new DocumentSession(null!, options));
-        Should.Throw<ArgumentNullException>(() => new DocumentSession(storage, null!));
+        Should.Throw<ArgumentNullException>(() => new DocumentSession(null!, eventStorage, options));
+        Should.Throw<ArgumentNullException>(() => new DocumentSession(docStorage, null!, options));
+        Should.Throw<ArgumentNullException>(() => new DocumentSession(docStorage, eventStorage, null!));
 
         Should.Throw<ArgumentNullException>(() => session.Store((SampleDocument)null!));
         Should.Throw<ArgumentNullException>(() => session.Store((IEnumerable<SampleDocument>)null!));
@@ -253,13 +246,12 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public async Task SoftDelete_Sets_IsDeleted_Flag_And_Persists(
-        IAquilaStorageProvider storage,
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         SampleDocument document)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var envelope = new DocumentEnvelope<SampleDocument>
         {
             Id = document.Id,
@@ -272,7 +264,7 @@ public sealed class DocumentSessionTests
         docStorage.ReadDocumentAsync<SampleDocument>(document.Id, nameof(SampleDocument), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<DocumentEnvelope<SampleDocument>?>(envelope));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         session.SoftDelete<SampleDocument>(document.Id);
@@ -296,10 +288,11 @@ public sealed class DocumentSessionTests
 
     [Theory, AutoNSubstituteData]
     public void Query_Method_Throws_NotSupportedException(
-        IAquilaStorageProvider storage)
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage)
     {
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
 #pragma warning disable CS0618
         Should.Throw<NotSupportedException>(() => session.Query<SampleDocument>());

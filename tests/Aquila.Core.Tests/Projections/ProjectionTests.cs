@@ -152,17 +152,16 @@ public sealed class ProjectionTests
     }
 
     [Theory, AutoNSubstituteData]
-    public async Task Inline_Projection_Runs_During_SaveChangesAsync(
-        IAquilaStorageProvider storage,
+    public async Task Inline_Projections_Execute_And_Upsert_Projections_During_SaveChangesAsync(
         IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage,
         Guid userId)
     {
         // Arrange
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         options.Projections.Add<UserProjection>(ProjectionLifecycle.Inline);
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
         var registeredEvent = new UserRegisteredEvent(userId, "Jane Doe", "jane@doe.com");
 
         // Act

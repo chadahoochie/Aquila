@@ -7,7 +7,7 @@ using Aquila.Core.Exceptions;
 
 namespace Aquila.Core.Storage;
 
-public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentStorageProvider, IEventStorageProvider
+public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventStorageProvider
 {
     private readonly ConcurrentDictionary<string, object> _documents = new();
     private readonly ConcurrentDictionary<string, EventStreamHeader> _streamHeaders = new();
@@ -16,8 +16,6 @@ public sealed class InMemoryStorageProvider : IAquilaStorageProvider, IDocumentS
     private long _globalSequence;
 
     public string ProviderName => "InMemory";
-    public IDocumentStorageProvider Documents => this;
-    public IEventStorageProvider Events => this;
 
     public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
 

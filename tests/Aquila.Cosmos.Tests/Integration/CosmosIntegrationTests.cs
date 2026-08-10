@@ -58,16 +58,16 @@ public sealed class CosmosIntegrationTests
         };
 
         // 1. Upsert & Read
-        await provider.Documents.UpsertDocumentAsync(envelope1, TestContext.Current.CancellationToken);
+        await provider.UpsertDocumentAsync(envelope1, TestContext.Current.CancellationToken);
 
-        var loaded = await provider.Documents.ReadDocumentAsync<IntegrationDocument>(doc1.Id, nameof(IntegrationDocument), TestContext.Current.CancellationToken);
+        var loaded = await provider.ReadDocumentAsync<IntegrationDocument>(doc1.Id, nameof(IntegrationDocument), TestContext.Current.CancellationToken);
         loaded.ShouldNotBeNull();
         loaded.Id.ShouldBe("id-101");
         loaded.Data.Title.ShouldBe("Order 101");
         loaded.Data.Amount.ShouldBe(150.00m);
 
         // 2. Query
-        var queryResults = await provider.Documents.QueryDocumentsAsync<IntegrationDocument>(
+        var queryResults = await provider.QueryDocumentsAsync<IntegrationDocument>(
             x => x.TenantId == "tenant-int",
             null,
             TestContext.Current.CancellationToken);
@@ -84,9 +84,9 @@ public sealed class CosmosIntegrationTests
             DocType = nameof(IntegrationDocument)
         };
 
-        await provider.Documents.ExecuteBatchAsync(new[] { deleteOp }, TestContext.Current.CancellationToken);
+        await provider.ExecuteBatchAsync(new[] { deleteOp }, TestContext.Current.CancellationToken);
 
-        var deletedRead = await provider.Documents.ReadDocumentAsync<IntegrationDocument>(doc1.Id, nameof(IntegrationDocument), TestContext.Current.CancellationToken);
+        var deletedRead = await provider.ReadDocumentAsync<IntegrationDocument>(doc1.Id, nameof(IntegrationDocument), TestContext.Current.CancellationToken);
         deletedRead.ShouldBeNull();
     }
 
@@ -106,14 +106,14 @@ public sealed class CosmosIntegrationTests
         };
 
         // 1. Append Event
-        await provider.Events.AppendEventsAsync(streamId, new[] { orderCreated }, expectedVersion: 0, ct: TestContext.Current.CancellationToken);
+        await provider.AppendEventsAsync(streamId, new[] { orderCreated }, expectedVersion: 0, ct: TestContext.Current.CancellationToken);
 
-        var header = await provider.Events.GetStreamHeaderAsync(streamId, "tenant-int", TestContext.Current.CancellationToken);
+        var header = await provider.GetStreamHeaderAsync(streamId, "tenant-int", TestContext.Current.CancellationToken);
         header.ShouldNotBeNull();
         header.Version.ShouldBe(1);
 
         // 2. Fetch Events
-        var events = await provider.Events.FetchEventsAsync(streamId, "tenant-int", 0, TestContext.Current.CancellationToken);
+        var events = await provider.FetchEventsAsync(streamId, "tenant-int", 0, TestContext.Current.CancellationToken);
         events.Count.ShouldBe(1);
 
         // 3. Optimistic Concurrency Failure Check
@@ -126,7 +126,7 @@ public sealed class CosmosIntegrationTests
         };
 
         await Should.ThrowAsync<AquilaConcurrencyException>(() =>
-            provider.Events.AppendEventsAsync(streamId, new[] { itemAdded }, expectedVersion: 99, ct: TestContext.Current.CancellationToken));
+            provider.AppendEventsAsync(streamId, new[] { itemAdded }, expectedVersion: 99, ct: TestContext.Current.CancellationToken));
     }
 
     [Fact]

@@ -267,7 +267,7 @@ public sealed class ProjectionDaemonTests
         aggregate.AccountId.ShouldBe("acc-1");
         aggregate.Owner.ShouldBe("Alice");
 
-        var envelope = await storageProvider.Documents.ReadDocumentAsync<DaemonAccountAggregate>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
+        var envelope = await storageProvider.ReadDocumentAsync<DaemonAccountAggregate>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
         envelope.ShouldNotBeNull();
         envelope.Data.AccountId.ShouldBe("acc-1");
         envelope.Data.Owner.ShouldBe("Alice");
@@ -424,14 +424,13 @@ public sealed class ProjectionDaemonTests
     [Fact]
     public async Task ExecuteAsync_WhenExceptionOccursInProcessing_LogsErrorAndRecovers()
     {
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
+        var docProvider = NSubstitute.Substitute.For<IDocumentStorageProvider>();
         var eventProvider = NSubstitute.Substitute.For<IEventStorageProvider>();
-        storageProvider.Events.Returns(eventProvider);
         eventProvider.FetchGlobalEventsAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<IReadOnlyList<IEvent>>(_ => throw new InvalidOperationException("Storage error"));
 
         var options = new StoreOptions();
-        options.UseStorageProvider(storageProvider);
+        options.UseStorageProvider(docProvider, eventProvider);
         options.Projections.Add<TestDaemonAsyncProjection>(ProjectionLifecycle.Async);
 
         var store = new DocumentStore(options);
@@ -470,7 +469,7 @@ public sealed class ProjectionDaemonTests
     public async Task ProjectionDaemon_Constructor_And_Methods_Throw_On_Invalid_Arguments()
     {
         var storageProvider = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storageProvider };
+        var options = new StoreOptions { DocumentStorage = storageProvider, EventStorage = storageProvider };
         var store = new DocumentStore(options);
         var checkpointStore = new InMemoryProjectionCheckpointStore();
 
@@ -516,11 +515,12 @@ public sealed class ProjectionDaemonTests
     }
 
     [Fact]
-    public void DaemonExtensions_AddAquilaDaemon_WithIAquilaStorageProviderOnly()
+    public void DaemonExtensions_AddAquilaDaemon_WithIDocumentStorageProviderOnly()
     {
         var services = new ServiceCollection();
         var storageProvider = new InMemoryStorageProvider();
-        services.AddSingleton<IAquilaStorageProvider>(storageProvider);
+        services.AddSingleton<IDocumentStorageProvider>(storageProvider);
+        services.AddSingleton<IEventStorageProvider>(storageProvider);
 
         services.AddAquilaDaemon();
 

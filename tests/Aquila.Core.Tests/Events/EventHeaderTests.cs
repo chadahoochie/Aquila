@@ -37,8 +37,8 @@ public sealed class EventHeaderTests
     {
         // Arrange
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var streamId = Guid.NewGuid().ToString();
         var correlationId = "corr-abc-123";
@@ -72,8 +72,8 @@ public sealed class EventHeaderTests
     {
         // Arrange
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var streamId = Guid.NewGuid().ToString();
         session.CorrelationId = "corr-start-stream";
@@ -101,8 +101,8 @@ public sealed class EventHeaderTests
     {
         // Arrange
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var streamId = Guid.NewGuid().ToString();
         session.CorrelationId = "corr-aggregate-1";
@@ -132,10 +132,10 @@ public sealed class EventHeaderTests
     {
         // Arrange
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
         options.Events.RegisterUpcaster<HeaderTestEventUpcaster>();
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(storage, storage, options);
 
         var streamId = Guid.NewGuid().ToString();
         session.CorrelationId = "corr-upcast-100";
@@ -201,8 +201,8 @@ public sealed class EventHeaderTests
     public void SetHeader_InputValidation_Throws_On_Invalid_Keys()
     {
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         Should.Throw<ArgumentException>(() => session.SetHeader("", "val"));
         Should.Throw<ArgumentException>(() => session.SetHeader("   ", "val"));
