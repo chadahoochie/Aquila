@@ -152,6 +152,11 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
 
+        if (id.Contains('/'))
+        {
+            return await QuerySingleDocumentAsync<T>(id, partitionKey, ct);
+        }
+
         try
         {
             var response = await Container.ReadItemAsync<CosmosDocumentEnvelope<T>>(
@@ -159,7 +164,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
                 new PartitionKey(partitionKey),
                 cancellationToken: ct);
 
-            if (response.Resource == null || response.Resource.IsDeleted) return null;
+            if (response?.Resource == null || response.Resource.IsDeleted) return null;
 
             return MapToEnvelope(response.Resource);
         }
@@ -167,6 +172,29 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         {
             return null;
         }
+    }
+
+    private async Task<DocumentEnvelope<T>?> QuerySingleDocumentAsync<T>(string id, string partitionKey, CancellationToken ct) where T : class
+    {
+        var queryDef = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
+            .WithParameter("@id", id);
+
+        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
+            queryDef, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(partitionKey) });
+
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(ct);
+            foreach (var item in response)
+            {
+                if (item != null && !item.IsDeleted)
+                {
+                    return MapToEnvelope(item);
+                }
+            }
+        }
+
+        return null;
     }
 
     public async Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(
@@ -277,7 +305,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         {
             await Container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, new PartitionKey(partitionKey), cancellationToken: ct);
         }
-        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
         {
         }
     }
@@ -346,6 +374,7 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         foreach (var @evt in eventList)
         {
             currentVersion++;
+            @evt.SetVersion(currentVersion);
             if (@evt.GlobalSequence == 0)
             {
                 @evt.SetGlobalSequence(Interlocked.Increment(ref _globalSequence));
@@ -429,6 +458,11 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
 
                 if (@event != null)
                 {
+                    if (long.TryParse(item.Version, out var itemVer) && itemVer > 0 && @event.Version == 0)
+                    {
+                        @event.SetVersion(itemVer);
+                    }
+
                     if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId) && @event.Version >= fromVersion)
                     {
                         events.Add(@event);
@@ -482,6 +516,11 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
 
                 if (@event != null)
                 {
+                    if (long.TryParse(item.Version, out var itemVer) && itemVer > 0 && @event.Version == 0)
+                    {
+                        @event.SetVersion(itemVer);
+                    }
+
                     if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId) && @event.GlobalSequence > fromGlobalSequence)
                     {
                         events.Add(@event);
@@ -497,14 +536,20 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
 
+        var targetId = $"$stream_{streamId}";
+        if (targetId.Contains('/'))
+        {
+            return await QueryStreamHeaderAsync(streamId, targetId, tenantId, ct);
+        }
+
         try
         {
             var resp = await Container.ReadItemAsync<CosmosDocumentEnvelope<EventStreamHeader>>(
-                $"$stream_{streamId}",
+                targetId,
                 new PartitionKey(streamId),
                 cancellationToken: ct);
 
-            if (resp.Resource == null) return null;
+            if (resp?.Resource == null) return null;
             if (!string.IsNullOrEmpty(tenantId) && (resp.Resource.TenantId != tenantId || resp.Resource.Data?.TenantId != tenantId))
             {
                 return null;
@@ -516,6 +561,33 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         {
             return null;
         }
+    }
+
+    private async Task<EventStreamHeader?> QueryStreamHeaderAsync(string streamId, string targetId, string? tenantId, CancellationToken ct)
+    {
+        var queryDef = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
+            .WithParameter("@id", targetId);
+
+        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<EventStreamHeader>>(
+            queryDef, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(streamId) });
+
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(ct);
+            foreach (var item in response)
+            {
+                if (item != null && !item.IsDeleted)
+                {
+                    if (!string.IsNullOrEmpty(tenantId) && (item.TenantId != tenantId || item.Data?.TenantId != tenantId))
+                    {
+                        return null;
+                    }
+                    return item.Data;
+                }
+            }
+        }
+
+        return null;
     }
 
     public async Task SaveSnapshotAsync<TAggregate>(string streamId, long version, TAggregate snapshot, string tenantId = "default", CancellationToken ct = default) where TAggregate : class
@@ -541,14 +613,20 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
 
+        var targetId = $"$snapshot_{streamId}";
+        if (targetId.Contains('/'))
+        {
+            return await QuerySnapshotAsync<TAggregate>(streamId, targetId, tenantId, ct);
+        }
+
         try
         {
             var resp = await Container.ReadItemAsync<CosmosDocumentEnvelope<TAggregate>>(
-                $"$snapshot_{streamId}",
+                targetId,
                 new PartitionKey(streamId),
                 cancellationToken: ct);
 
-            if (resp.Resource == null || resp.Resource.IsDeleted) return (null, 0);
+            if (resp?.Resource == null || resp.Resource.IsDeleted) return (null, 0);
             if (!string.IsNullOrEmpty(tenantId) && resp.Resource.TenantId != tenantId)
             {
                 return (null, 0);
@@ -565,6 +643,39 @@ public sealed class CosmosStorageProvider : IAquilaStorageProvider, IDocumentSto
         {
             return (null, 0);
         }
+    }
+
+    private async Task<(TAggregate? Snapshot, long SnapshotVersion)> QuerySnapshotAsync<TAggregate>(string streamId, string targetId, string tenantId, CancellationToken ct) where TAggregate : class
+    {
+        var queryDef = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
+            .WithParameter("@id", targetId);
+
+        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<TAggregate>>(
+            queryDef, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(streamId) });
+
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(ct);
+            foreach (var item in response)
+            {
+                if (item != null && !item.IsDeleted)
+                {
+                    if (!string.IsNullOrEmpty(tenantId) && item.TenantId != tenantId)
+                    {
+                        return (null, 0);
+                    }
+
+                    if (long.TryParse(item.Version, out var snapshotVersion))
+                    {
+                        return (item.Data, snapshotVersion);
+                    }
+
+                    return (item.Data, 0);
+                }
+            }
+        }
+
+        return (null, 0);
     }
 
     private static DocumentEnvelope<T> MapToEnvelope<T>(CosmosDocumentEnvelope<T> item)
