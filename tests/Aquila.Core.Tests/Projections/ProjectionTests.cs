@@ -171,7 +171,7 @@ public sealed class ProjectionTests
 
         // Assert
         await docStorage.Received(1).UpsertDocumentAsync(
-            Arg.Is<DocumentEnvelope<object>>(env => env.Id == userId.ToString() && env.DocType == nameof(UserAggregate)),
+            Arg.Is<DocumentEnvelope<UserAggregate>>(env => env.Id == userId.ToString() && env.DocType == nameof(UserAggregate)),
             Arg.Any<CancellationToken>());
     }
 

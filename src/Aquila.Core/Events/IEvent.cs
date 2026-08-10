@@ -65,6 +65,8 @@ public static class EventExtensions
 {
     private static readonly ConcurrentDictionary<Type, Action<IEvent, long>> _globalSequenceSetters = new();
 
+    private static readonly ConcurrentDictionary<Type, Action<IEvent, long>> _versionSetters = new();
+
     public static void SetGlobalSequence(this IEvent evt, long globalSequence)
     {
         if (evt is null) return;
@@ -83,6 +85,26 @@ public static class EventExtensions
         });
 
         setter(evt, globalSequence);
+    }
+
+    public static void SetVersion(this IEvent evt, long version)
+    {
+        if (evt is null) return;
+        var setter = _versionSetters.GetOrAdd(evt.GetType(), t =>
+        {
+            var prop = t.GetProperty(nameof(IEvent.Version));
+            if (prop != null && prop.CanWrite && prop.SetMethod != null)
+            {
+                var instanceParam = Expression.Parameter(typeof(IEvent), "evt");
+                var valueParam = Expression.Parameter(typeof(long), "val");
+                var castInstance = Expression.Convert(instanceParam, t);
+                var call = Expression.Call(castInstance, prop.SetMethod, valueParam);
+                return Expression.Lambda<Action<IEvent, long>>(call, instanceParam, valueParam).Compile();
+            }
+            return (_, _) => { };
+        });
+
+        setter(evt, version);
     }
 }
 

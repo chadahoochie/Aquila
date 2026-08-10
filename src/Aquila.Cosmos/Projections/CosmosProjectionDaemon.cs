@@ -254,6 +254,11 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
 
     private static bool IsEventDocument(object item)
     {
+        if (item is IEvent)
+        {
+            return true;
+        }
+
         if (item is CosmosDocumentEnvelope envelope)
         {
             return string.Equals(envelope.DocType, "$event", StringComparison.Ordinal);
@@ -286,6 +291,12 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
 
     private static IEvent? ExtractEvent(object item)
     {
+        if (item is IEvent directEvt)
+        {
+            EnsureTypedPayload(directEvt);
+            return directEvt;
+        }
+
         object? rawData = null;
 
         if (item is JObject jobj)

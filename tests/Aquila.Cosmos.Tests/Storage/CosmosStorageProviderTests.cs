@@ -425,6 +425,25 @@ public sealed class CosmosStorageProviderTests
     }
 
     [Fact]
+    public async Task AppendEventsAsync_Uses_TransactionalBatch_When_Available()
+    {
+        var mockBatch = Substitute.For<TransactionalBatch>();
+        var mockBatchResponse = Substitute.For<TransactionalBatchResponse>();
+        mockBatchResponse.IsSuccessStatusCode.Returns(true);
+        mockBatch.ExecuteAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(mockBatchResponse));
+
+        _mockContainer.CreateTransactionalBatch(new PartitionKey("s-batch")).Returns(mockBatch);
+
+        var evt = new EventEnvelope<object> { StreamId = "s-batch", Version = 0, TenantId = "t1", Data = new MockDoc("1", "Batch") };
+        await _provider.Events.AppendEventsAsync("s-batch", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
+
+        _mockContainer.Received(1).CreateTransactionalBatch(new PartitionKey("s-batch"));
+        mockBatch.Received().UpsertItem(Arg.Is<CosmosDocumentEnvelope<object>>(e => e.PartitionKey == "s-batch"));
+        mockBatch.Received().UpsertItem(Arg.Is<CosmosDocumentEnvelope<EventStreamHeader>>(e => e.PartitionKey == "s-batch"));
+        await mockBatch.Received(1).ExecuteAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task QueryDocumentsAsync_Returns_EmptyArray_When_Queryable_Is_Null()
     {
         _mockContainer.GetItemLinqQueryable<CosmosDocumentEnvelope<MockDoc>>(Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>(), Arg.Any<CosmosLinqSerializerOptions>())
@@ -551,13 +570,13 @@ public sealed class CosmosStorageProviderTests
     }
 
     [Fact]
-    public async Task Dispose_And_DisposeAsync_Disposes_CosmosClient()
+    public async Task Dispose_And_DisposeAsync_DoesNotDispose_External_CosmosClient()
     {
         _provider.Dispose();
-        _mockClient.Received().Dispose();
+        _mockClient.DidNotReceive().Dispose();
 
         await _provider.DisposeAsync();
-        _mockClient.Received().Dispose();
+        _mockClient.DidNotReceive().Dispose();
     }
 
     [Fact]

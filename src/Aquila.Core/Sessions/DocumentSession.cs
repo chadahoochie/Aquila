@@ -1,6 +1,7 @@
 using System.Reflection;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
+using Aquila.Core.Events;
 using Aquila.Core.Patching;
 using Aquila.Core.Projections;
 using Aquila.Core.Storage;
@@ -274,27 +275,46 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             {
                 foreach (var @evt in uncommittedEvents)
                 {
-                    var aggregateId = @evt.StreamId;
-                    var existingAggregate = await LoadAsync<object>(aggregateId, aggregateId, ct) ?? Activator.CreateInstance(proj.AggregateType)!;
-                    proj.ApplyEvent(@evt, existingAggregate);
-
-                    var envelope = new DocumentEnvelope<object>
-                    {
-                        Id = aggregateId,
-                        PartitionKey = aggregateId,
-                        DocType = proj.AggregateType.Name,
-                        TenantId = TenantId,
-                        IsDeleted = false,
-                        Data = existingAggregate
-                    };
-
-                    await Storage.Documents.UpsertDocumentAsync(envelope, ct);
+                    await ProcessSingleStreamInlineEventAsync(proj, @evt, ct);
                 }
             }
         }
 
         _pendingOperations.Clear();
         EventStore.ClearUncommittedEvents();
+    }
+
+    private async Task ProcessSingleStreamInlineEventAsync(IProjection proj, IEvent @evt, CancellationToken ct)
+    {
+        var aggregateId = @evt.StreamId;
+        var loadMethod = typeof(IQuerySession)
+            .GetMethods()
+            .First(m => m.Name == nameof(LoadAsync) && m.IsGenericMethod && m.GetParameters().Length == 3 && m.GetParameters()[0].ParameterType == typeof(string))
+            .MakeGenericMethod(proj.AggregateType);
+
+        var loadTask = (Task)loadMethod.Invoke(this, new object?[] { aggregateId, aggregateId, ct })!;
+        await loadTask.ConfigureAwait(false);
+
+        var resultProp = loadTask.GetType().GetProperty("Result")!;
+        var existingAggregate = resultProp.GetValue(loadTask) ?? Activator.CreateInstance(proj.AggregateType)!;
+
+        proj.ApplyEvent(@evt, existingAggregate);
+
+        var envelopeType = typeof(DocumentEnvelope<>).MakeGenericType(proj.AggregateType);
+        var envelope = Activator.CreateInstance(envelopeType)!;
+        envelopeType.GetProperty("Id")!.SetValue(envelope, aggregateId);
+        envelopeType.GetProperty("PartitionKey")!.SetValue(envelope, aggregateId);
+        envelopeType.GetProperty("DocType")!.SetValue(envelope, proj.AggregateType.Name);
+        envelopeType.GetProperty("TenantId")!.SetValue(envelope, TenantId);
+        envelopeType.GetProperty("IsDeleted")!.SetValue(envelope, false);
+        envelopeType.GetProperty("Data")!.SetValue(envelope, existingAggregate);
+
+        var upsertMethod = typeof(IDocumentStorageProvider)
+            .GetMethod(nameof(IDocumentStorageProvider.UpsertDocumentAsync))!
+            .MakeGenericMethod(proj.AggregateType);
+
+        var upsertTask = (Task)upsertMethod.Invoke(Storage.Documents, new object[] { envelope, ct })!;
+        await upsertTask.ConfigureAwait(false);
     }
 
     private void DetectAndQueueDirtyEntities()
