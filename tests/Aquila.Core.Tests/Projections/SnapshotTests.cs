@@ -33,13 +33,12 @@ public sealed class SnapshotTests
 
     [Theory, AutoNSubstituteData]
     public async Task AggregateStreamAsync_WithSnapshot_RehydratesFromSnapshotAndFetchesOnlyRemainingEvents(
-        IAquilaStorageProvider storage,
+        IDocumentStorageProvider docStorage,
         IEventStorageProvider eventStorage)
     {
         // Arrange
         var streamId = Guid.NewGuid().ToString();
-        storage.Events.Returns(eventStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
 
         var snapshotState = new SnapshotTestAggregate { TotalAmount = 500 };
         long snapshotVersion = 50;
@@ -49,24 +48,14 @@ public sealed class SnapshotTests
 
         var remainingEvents = new List<IEvent>
         {
-            new EventEnvelope<SnapshotTestEvent>
-            {
-                StreamId = streamId,
-                Version = 51,
-                Data = new SnapshotTestEvent(50)
-            },
-            new EventEnvelope<SnapshotTestEvent>
-            {
-                StreamId = streamId,
-                Version = 52,
-                Data = new SnapshotTestEvent(25)
-            }
+            new EventEnvelope<SnapshotTestEvent> { Version = 51, Data = new SnapshotTestEvent(50) },
+            new EventEnvelope<SnapshotTestEvent> { Version = 52, Data = new SnapshotTestEvent(25) }
         };
 
-        eventStorage.FetchEventsAsync(streamId, Arg.Any<string?>(), 51, Arg.Any<CancellationToken>())
+        eventStorage.FetchEventsAsync(streamId, Arg.Any<string>(), 51, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(remainingEvents));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         var aggregate = await session.Events.AggregateStreamAsync<SnapshotTestAggregate>(streamId, ct: TestContext.Current.CancellationToken);

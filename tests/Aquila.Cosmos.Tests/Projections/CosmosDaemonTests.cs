@@ -399,7 +399,7 @@ public sealed class CosmosDaemonTests
         aggregate.AccountId.ShouldBe("acc-1");
         aggregate.Owner.ShouldBe("Alice");
 
-        var envelope = await storageProvider.Documents.ReadDocumentAsync<CosmosDaemonAccountAggregate>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
+        var envelope = await storageProvider.ReadDocumentAsync<CosmosDaemonAccountAggregate>("accounts/acc-1", "accounts/acc-1", TestContext.Current.CancellationToken);
         envelope.ShouldNotBeNull();
         envelope.Data.AccountId.ShouldBe("acc-1");
         envelope.Data.Owner.ShouldBe("Alice");
@@ -532,18 +532,18 @@ public sealed class CosmosDaemonTests
         dummyDatabase.Client.Returns(dummyClient);
 
         var daemonWithContainer = new CosmosProjectionDaemon(dummyContainer, optionsWithProvider, checkpointStore);
-        optionsWithProvider.StorageProvider.ShouldBeSameAs(existingProvider);
+        optionsWithProvider.DocumentStorage.ShouldBeSameAs(existingProvider);
 
         var daemonWithClient = new CosmosProjectionDaemon(dummyClient, optionsWithProvider, checkpointStore);
-        optionsWithProvider.StorageProvider.ShouldBeSameAs(existingProvider);
+        optionsWithProvider.DocumentStorage.ShouldBeSameAs(existingProvider);
 
         var optionsNullProvider1 = new StoreOptions();
         var daemonContainer = new CosmosProjectionDaemon(dummyContainer, optionsNullProvider1, checkpointStore);
-        optionsNullProvider1.StorageProvider.ShouldNotBeNull();
+        optionsNullProvider1.DocumentStorage.ShouldNotBeNull();
 
         var optionsNullProvider2 = new StoreOptions();
         var daemonClient = new CosmosProjectionDaemon(dummyClient, optionsNullProvider2, checkpointStore);
-        optionsNullProvider2.StorageProvider.ShouldNotBeNull();
+        optionsNullProvider2.DocumentStorage.ShouldNotBeNull();
     }
 
     [Fact]
@@ -873,7 +873,7 @@ public sealed class CosmosDaemonTests
         }
         await daemon.CatchUpAsync(TestContext.Current.CancellationToken);
 
-        var envelope = await storageProvider.Documents.ReadDocumentAsync<CosmosDaemonAccountAggregate>("accounts/acc-100", "accounts/acc-100", TestContext.Current.CancellationToken);
+        var envelope = await storageProvider.ReadDocumentAsync<CosmosDaemonAccountAggregate>("accounts/acc-100", "accounts/acc-100", TestContext.Current.CancellationToken);
         envelope.ShouldNotBeNull();
         var aggregate = envelope.Data.ShouldBeOfType<CosmosDaemonAccountAggregate>();
         aggregate.Owner.ShouldBe("Alice Updated");

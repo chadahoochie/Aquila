@@ -181,20 +181,38 @@ public sealed class EventRegistration
 public sealed class StoreOptions
 {
     public string DefaultTenantId { get; set; } = "default";
-    public IAquilaStorageProvider StorageProvider { get; set; } = new InMemoryStorageProvider();
+    public IDocumentStorageProvider DocumentStorage { get; set; } = new InMemoryStorageProvider();
+    public IEventStorageProvider EventStorage { get; set; } = new InMemoryStorageProvider();
 
     public SchemaPolicy Schema { get; } = new();
     public ProjectionRegistration Projections { get; } = new();
     public EventRegistration Events { get; } = new();
 
-    public void UseStorageProvider(IAquilaStorageProvider provider)
+    public void UseStorageProvider(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage)
+    {
+        ArgumentNullException.ThrowIfNull(documentStorage);
+        ArgumentNullException.ThrowIfNull(eventStorage);
+        DocumentStorage = documentStorage;
+        EventStorage = eventStorage;
+    }
+
+    public void UseStorageProvider(object provider)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        StorageProvider = provider;
+        if (provider is IDocumentStorageProvider docStorage)
+        {
+            DocumentStorage = docStorage;
+        }
+        if (provider is IEventStorageProvider evtStorage)
+        {
+            EventStorage = evtStorage;
+        }
     }
 
     public void UseInMemoryStorage()
     {
-        StorageProvider = new InMemoryStorageProvider();
+        var provider = new InMemoryStorageProvider();
+        DocumentStorage = provider;
+        EventStorage = provider;
     }
 }

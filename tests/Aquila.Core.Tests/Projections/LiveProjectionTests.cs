@@ -14,13 +14,9 @@ public sealed class LiveProjectionTests
     public async Task LiveStreamAsync_Evaluates_Registered_SingleStreamProjection_Without_Persisting_Document()
     {
         // Arrange
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
         var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
         var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
-        storageProvider.Documents.Returns(docStorage);
-        storageProvider.Events.Returns(eventStorage);
-
-        var options = new StoreOptions { StorageProvider = storageProvider };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         options.Projections.Add<UserProjection>(ProjectionLifecycle.Live);
 
         var streamId = Guid.NewGuid().ToString();
@@ -45,7 +41,7 @@ public sealed class LiveProjectionTests
         eventStorage.FetchEventsAsync(streamId, "default", 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
 
-        using var session = new QuerySession(storageProvider, options);
+        using var session = new QuerySession(docStorage, eventStorage, options);
 
         // Act
         var result = await session.LiveStreamAsync<UserAggregate>(streamId, TestContext.Current.CancellationToken);
@@ -66,13 +62,9 @@ public sealed class LiveProjectionTests
     public async Task LiveStreamAsync_Falls_Back_To_SingleStream_Aggregate_Convention_When_No_Projection_Registered()
     {
         // Arrange
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
         var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
         var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
-        storageProvider.Documents.Returns(docStorage);
-        storageProvider.Events.Returns(eventStorage);
-
-        var options = new StoreOptions { StorageProvider = storageProvider };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         // Note: No projection registered in options.Projections
 
         var streamId = Guid.NewGuid().ToString();
@@ -97,7 +89,7 @@ public sealed class LiveProjectionTests
         eventStorage.FetchEventsAsync(streamId, "default", 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
 
-        using var session = new QuerySession(storageProvider, options);
+        using var session = new QuerySession(docStorage, eventStorage, options);
 
         // Act
         var result = await session.LiveStreamAsync<UserAggregate>(streamId, TestContext.Current.CancellationToken);
@@ -117,17 +109,15 @@ public sealed class LiveProjectionTests
     public async Task LiveStreamAsync_Returns_Null_When_Stream_Has_No_Events()
     {
         // Arrange
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
+        var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
         var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
-        storageProvider.Events.Returns(eventStorage);
-
-        var options = new StoreOptions { StorageProvider = storageProvider };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var streamId = "empty-stream";
 
         eventStorage.FetchEventsAsync(streamId, "default", 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(Array.Empty<IEvent>()));
 
-        using var session = new QuerySession(storageProvider, options);
+        using var session = new QuerySession(docStorage, eventStorage, options);
 
         // Act
         var result = await session.LiveStreamAsync<UserAggregate>(streamId, TestContext.Current.CancellationToken);
@@ -140,11 +130,9 @@ public sealed class LiveProjectionTests
     public async Task LiveStreamAsync_Supports_Guid_StreamId_Overload()
     {
         // Arrange
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
+        var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
         var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
-        storageProvider.Events.Returns(eventStorage);
-
-        var options = new StoreOptions { StorageProvider = storageProvider };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var streamIdGuid = Guid.NewGuid();
         var userId = Guid.NewGuid();
 
@@ -161,7 +149,7 @@ public sealed class LiveProjectionTests
         eventStorage.FetchEventsAsync(streamIdGuid.ToString(), "default", 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
 
-        using var session = new QuerySession(storageProvider, options);
+        using var session = new QuerySession(docStorage, eventStorage, options);
 
         // Act
         var result = await session.LiveStreamAsync<UserAggregate>(streamIdGuid, TestContext.Current.CancellationToken);
@@ -175,11 +163,9 @@ public sealed class LiveProjectionTests
     public async Task LiveStreamAsync_Supports_TenantId_Override_Parameter()
     {
         // Arrange
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
+        var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
         var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
-        storageProvider.Events.Returns(eventStorage);
-
-        var options = new StoreOptions { StorageProvider = storageProvider };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var streamId = "tenant-stream-1";
         var customTenant = "tenant-xyz";
         var userId = Guid.NewGuid();
@@ -198,7 +184,7 @@ public sealed class LiveProjectionTests
         eventStorage.FetchEventsAsync(streamId, customTenant, 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
 
-        using var session = new QuerySession(storageProvider, options);
+        using var session = new QuerySession(docStorage, eventStorage, options);
 
         // Act
         var result = await session.LiveStreamAsync<UserAggregate>(streamId, customTenant, TestContext.Current.CancellationToken);
@@ -212,9 +198,10 @@ public sealed class LiveProjectionTests
     public async Task LiveStreamAsync_Throws_ArgumentException_On_NullOrWhiteSpace_StreamId()
     {
         // Arrange
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
-        var options = new StoreOptions { StorageProvider = storageProvider };
-        using var session = new QuerySession(storageProvider, options);
+        var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
+        var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new QuerySession(docStorage, eventStorage, options);
 
         // Act & Assert
         await Should.ThrowAsync<ArgumentException>(() => session.LiveStreamAsync<UserAggregate>("", TestContext.Current.CancellationToken));
@@ -226,13 +213,9 @@ public sealed class LiveProjectionTests
     public async Task QuerySession_TrackingMode_Constructor_Overload_Evaluates_LiveStream()
     {
         // Arrange
-        var storageProvider = NSubstitute.Substitute.For<IAquilaStorageProvider>();
         var docStorage = NSubstitute.Substitute.For<IDocumentStorageProvider>();
         var eventStorage = NSubstitute.Substitute.For<IEventStorageProvider>();
-        storageProvider.Documents.Returns(docStorage);
-        storageProvider.Events.Returns(eventStorage);
-
-        var options = new StoreOptions { StorageProvider = storageProvider };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         options.Projections.Add<UserProjection>(ProjectionLifecycle.Live);
 
         var streamId = Guid.NewGuid().ToString();
@@ -251,7 +234,7 @@ public sealed class LiveProjectionTests
         eventStorage.FetchEventsAsync(streamId, "default", 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
 
-        using var session = new QuerySession(storageProvider, options, TrackingMode.Lightweight);
+        using var session = new QuerySession(docStorage, eventStorage, options, TrackingMode.Lightweight);
 
         // Act
         var result = await session.LiveStreamAsync<UserAggregate>(streamId, TestContext.Current.CancellationToken);

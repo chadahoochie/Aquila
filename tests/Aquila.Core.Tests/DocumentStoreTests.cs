@@ -22,7 +22,7 @@ public sealed class DocumentStoreTests
         });
 
         store.Options.ShouldNotBeNull();
-        store.Options.StorageProvider.ProviderName.ShouldBe("InMemory");
+        store.Options.DocumentStorage.ProviderName.ShouldBe("InMemory");
         store.Options.DefaultTenantId.ShouldBe("custom-tenant");
 
         await store.InitializeAsync(TestContext.Current.CancellationToken);

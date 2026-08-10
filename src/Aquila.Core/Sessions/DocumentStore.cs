@@ -17,9 +17,13 @@ public sealed class DocumentStore : IDocumentStore
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        if (Options.StorageProvider != null)
+        if (Options.DocumentStorage != null)
         {
-            await Options.StorageProvider.InitializeAsync(ct);
+            await Options.DocumentStorage.InitializeAsync(ct);
+        }
+        if (Options.EventStorage != null && !ReferenceEquals(Options.EventStorage, Options.DocumentStorage))
+        {
+            await Options.EventStorage.InitializeAsync(ct);
         }
     }
 
@@ -37,7 +41,7 @@ public sealed class DocumentStore : IDocumentStore
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         }
-        return new QuerySession(Options.StorageProvider, Options, tenantId);
+        return new QuerySession(Options.DocumentStorage, Options.EventStorage, Options, tenantId);
     }
 
     public IDocumentSession OpenSession(TrackingMode trackingMode = TrackingMode.DirtyTracking, string? tenantId = null)
@@ -46,7 +50,7 @@ public sealed class DocumentStore : IDocumentStore
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         }
-        return new DocumentSession(Options.StorageProvider, Options, trackingMode, tenantId);
+        return new DocumentSession(Options.DocumentStorage, Options.EventStorage, Options, trackingMode, tenantId);
     }
 
     public IDocumentSession OpenSession(string? tenantId)
@@ -61,17 +65,24 @@ public sealed class DocumentStore : IDocumentStore
 
     public void Dispose()
     {
-        Options.StorageProvider?.Dispose();
+        Options.DocumentStorage?.Dispose();
+        if (Options.EventStorage != null && !ReferenceEquals(Options.EventStorage, Options.DocumentStorage))
+        {
+            Options.EventStorage.Dispose();
+        }
         GC.SuppressFinalize(this);
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        if (Options.StorageProvider != null)
+        if (Options.DocumentStorage != null)
         {
-            return Options.StorageProvider.DisposeAsync();
+            await Options.DocumentStorage.DisposeAsync();
+        }
+        if (Options.EventStorage != null && !ReferenceEquals(Options.EventStorage, Options.DocumentStorage))
+        {
+            await Options.EventStorage.DisposeAsync();
         }
         GC.SuppressFinalize(this);
-        return ValueTask.CompletedTask;
     }
 }

@@ -33,12 +33,13 @@ public sealed class EventStoreTests
 {
     [Theory, AutoNSubstituteData]
     public async Task StartStream_Appends_Initial_Events_To_Uncommitted_Queue(
-        IAquilaStorageProvider storage,
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider evtStorage,
         Guid accountId, string ownerName)
     {
         // Arrange
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = evtStorage };
+        using var session = new DocumentSession(docStorage, evtStorage, options);
         var createdEvent = new AccountCreatedEvent(accountId, ownerName, 500.00m);
 
         // Act
@@ -46,7 +47,7 @@ public sealed class EventStoreTests
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Assert
-        await storage.Events.Received(1).AppendEventsAsync(
+        await evtStorage.Received(1).AppendEventsAsync(
             accountId.ToString(),
             Arg.Is<IEnumerable<IEvent>>(events => System.Linq.Enumerable.Any(events, e => e.Version == 1)),
             -1,
@@ -55,12 +56,13 @@ public sealed class EventStoreTests
 
     [Theory, AutoNSubstituteData]
     public async Task Append_Guid_And_String_Overloads_Queue_Events(
-        IAquilaStorageProvider storage,
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider evtStorage,
         Guid accountId)
     {
         // Arrange
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = evtStorage };
+        using var session = new DocumentSession(docStorage, evtStorage, options);
         var depositEvent = new MoneyDepositedEvent(accountId, 100.00m);
 
         // Act
@@ -69,7 +71,7 @@ public sealed class EventStoreTests
         await session.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Assert
-        await storage.Events.Received(1).AppendEventsAsync(
+        await evtStorage.Received(1).AppendEventsAsync(
             accountId.ToString(),
             Arg.Any<IEnumerable<IEvent>>(),
             Arg.Any<long>(),
@@ -78,13 +80,12 @@ public sealed class EventStoreTests
 
     [Theory, AutoNSubstituteData]
     public async Task AggregateStreamAsync_Rehydrates_State_From_Fetched_Events(
-        IAquilaStorageProvider storage,
+        IDocumentStorageProvider docStorage,
         IEventStorageProvider eventStorage,
         Guid accountId)
     {
         // Arrange
-        storage.Events.Returns(eventStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
 
         var events = new List<IEvent>
         {
@@ -105,7 +106,7 @@ public sealed class EventStoreTests
         eventStorage.FetchEventsAsync(accountId.ToString(), Arg.Any<string?>(), 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         var aggregate = await session.Events.AggregateStreamAsync<BankAccountAggregate>(accountId, ct: TestContext.Current.CancellationToken);
@@ -119,13 +120,12 @@ public sealed class EventStoreTests
 
     [Theory, AutoNSubstituteData]
     public async Task AggregateStreamAsync_WithVersionLimit_StopsAtSpecifiedVersion(
-        IAquilaStorageProvider storage,
+        IDocumentStorageProvider docStorage,
         IEventStorageProvider eventStorage,
         Guid accountId)
     {
         // Arrange
-        storage.Events.Returns(eventStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
 
         var events = new List<IEvent>
         {
@@ -146,7 +146,7 @@ public sealed class EventStoreTests
         eventStorage.FetchEventsAsync(accountId.ToString(), Arg.Any<string?>(), 0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<IEvent>>(events));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         // Act
         var aggregate = await session.Events.AggregateStreamAsync<BankAccountAggregate>(accountId, version: 1, ct: TestContext.Current.CancellationToken);
@@ -158,10 +158,11 @@ public sealed class EventStoreTests
 
     [Theory, AutoNSubstituteData]
     public void EventStore_InputValidation_ThrowsExceptions_OnInvalidParameters(
-        IAquilaStorageProvider storage)
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider evtStorage)
     {
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = evtStorage };
+        using var session = new DocumentSession(docStorage, evtStorage, options);
 
         Should.Throw<ArgumentException>(() => session.Events.StartStream<BankAccountAggregate>("", new object()));
         Should.Throw<ArgumentException>(() => session.Events.StartStream<BankAccountAggregate>("   ", new object()));

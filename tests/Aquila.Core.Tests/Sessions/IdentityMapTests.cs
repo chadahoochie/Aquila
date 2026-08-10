@@ -69,12 +69,11 @@ public sealed class IdentityMapTests
     }
 
     [Theory, AutoNSubstituteData]
-    public async Task LoadAsync_Returns_Cached_Instance_On_Subsequent_Calls(
-        IAquilaStorageProvider storage,
-        IDocumentStorageProvider docStorage)
+    public async Task IdentityMap_Returns_Cached_Instance_On_Subsequent_Calls(
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage)
     {
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
         var doc = new TestDoc("doc-1", "Original");
         var envelope = new DocumentEnvelope<TestDoc>
         {
@@ -88,7 +87,7 @@ public sealed class IdentityMapTests
         docStorage.ReadDocumentAsync<TestDoc>("doc-1", nameof(TestDoc), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<DocumentEnvelope<TestDoc>?>(envelope));
 
-        using var session = new DocumentSession(storage, options);
+        using var session = new DocumentSession(docStorage, eventStorage, options);
 
         var doc1 = await session.LoadAsync<TestDoc>("doc-1", ct: TestContext.Current.CancellationToken);
         var doc2 = await session.LoadAsync<TestDoc>("doc-1", ct: TestContext.Current.CancellationToken);
@@ -102,12 +101,11 @@ public sealed class IdentityMapTests
 
     [Theory, AutoNSubstituteData]
     public async Task Store_Tracks_Entity_In_IdentityMap(
-        IAquilaStorageProvider storage,
-        IDocumentStorageProvider docStorage)
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage)
     {
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        using var session = new DocumentSession(docStorage, eventStorage, options);
         var doc = new TestDoc("doc-100", "Store Test");
 
         session.Store(doc);
@@ -121,12 +119,11 @@ public sealed class IdentityMapTests
 
     [Theory, AutoNSubstituteData]
     public async Task Dispose_Clears_IdentityMap(
-        IAquilaStorageProvider storage,
-        IDocumentStorageProvider docStorage)
+        IDocumentStorageProvider docStorage,
+        IEventStorageProvider eventStorage)
     {
-        storage.Documents.Returns(docStorage);
-        var options = new StoreOptions { StorageProvider = storage };
-        var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
+        var session = new DocumentSession(docStorage, eventStorage, options);
         var doc = new TestDoc("doc-1", "Original");
         var envelope = new DocumentEnvelope<TestDoc>
         {

@@ -89,7 +89,7 @@ public sealed class CosmosQueryPushdownTests
             ContinuationToken = "token-123"
         };
 
-        await provider.Documents.QueryDocumentsAsync(predicate, options, TestContext.Current.CancellationToken);
+        await provider.QueryDocumentsAsync(predicate, options, TestContext.Current.CancellationToken);
 
         mockContainer.Received(1).GetItemLinqQueryable<CosmosDocumentEnvelope<PushdownDoc>>(
             false,

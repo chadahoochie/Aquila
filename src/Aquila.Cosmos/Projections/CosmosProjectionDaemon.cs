@@ -72,7 +72,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(container);
-        if (options.StorageProvider == null)
+        if (options.DocumentStorage == null || options.EventStorage == null)
         {
             options.UseStorageProvider(new CosmosStorageProvider(container.Database.Client));
         }
@@ -83,7 +83,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(client);
-        if (options.StorageProvider == null)
+        if (options.DocumentStorage == null || options.EventStorage == null)
         {
             options.UseStorageProvider(new CosmosStorageProvider(client, databaseName, containerName));
         }
@@ -138,7 +138,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
         var param = System.Linq.Expressions.Expression.Parameter(envelopeType, "env");
         var lambda = System.Linq.Expressions.Expression.Lambda(System.Linq.Expressions.Expression.Constant(true), param);
 
-        var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.StorageProvider.Documents, new object?[] { lambda, null, ct })!;
+        var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.DocumentStorage, new object?[] { lambda, null, ct })!;
         await queryTask.ConfigureAwait(false);
 
         var resultProperty = queryTask.GetType().GetProperty("Result")!;
@@ -155,7 +155,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
             string id = (string)idProp.GetValue(envelope)!;
             string pk = (string)pkProp.GetValue(envelope)!;
 
-            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.StorageProvider.Documents, new object[] { id, pk, ct })!;
+            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.DocumentStorage, new object[] { id, pk, ct })!;
             await deleteTask.ConfigureAwait(false);
         }
     }
@@ -191,7 +191,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
 
         if (minSequence == long.MaxValue) return false;
 
-        var eventStorage = _documentStore.Options.StorageProvider.Events;
+        var eventStorage = _documentStore.Options.EventStorage;
         var batch = await eventStorage.FetchGlobalEventsAsync(minSequence, batchSize: 100, tenantId: null, ct: ct).ConfigureAwait(false);
         if (batch.Count == 0) return false;
 
@@ -474,7 +474,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
                 Data = existingAggregate
             };
 
-            await _documentStore.Options.StorageProvider.Documents.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
+            await _documentStore.Options.DocumentStorage.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
         }
     }
 

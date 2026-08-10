@@ -95,7 +95,7 @@ public class Program
 
         Console.WriteLine("\n[1] StoreOptions and Schema Policy configured successfully.");
         var options = serviceProvider.GetRequiredService<StoreOptions>();
-        Console.WriteLine($"    - Storage Provider: {options.StorageProvider.ProviderName}");
+        Console.WriteLine($"    - Storage Provider: {options.DocumentStorage.ProviderName}");
         Console.WriteLine($"    - Registered Projections: {options.Projections.Projections.Count}");
 
         Console.WriteLine("\n[2] Executing Document Storage & Event Sourcing Session...");

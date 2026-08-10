@@ -17,17 +17,17 @@ public sealed class SecurityTests
     {
         // Arrange
         var provider = new InMemoryStorageProvider();
-        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", StorageProvider = provider };
-        var optionsTenantB = new StoreOptions { DefaultTenantId = "tenant-b", StorageProvider = provider };
+        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", DocumentStorage = provider, EventStorage = provider };
+        var optionsTenantB = new StoreOptions { DefaultTenantId = "tenant-b", DocumentStorage = provider, EventStorage = provider };
 
-        using (var sessionA = new DocumentSession(provider, optionsTenantA, "tenant-a"))
+        using (var sessionA = new DocumentSession(provider, provider, optionsTenantA, "tenant-a"))
         {
             sessionA.Store(new SecureDocument(docId, "Secret Tenant A Data"));
             await sessionA.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Act - Attempt cross-tenant read from Tenant B context
-        using var sessionB = new DocumentSession(provider, optionsTenantB, "tenant-b");
+        using var sessionB = new DocumentSession(provider, provider, optionsTenantB, "tenant-b");
         var result = await sessionB.LoadAsync<SecureDocument>(docId, ct: TestContext.Current.CancellationToken);
 
         // Assert - Cross tenant document read MUST return null
@@ -40,10 +40,10 @@ public sealed class SecurityTests
     {
         // Arrange
         var provider = new InMemoryStorageProvider();
-        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", StorageProvider = provider };
-        var optionsTenantB = new StoreOptions { DefaultTenantId = "tenant-b", StorageProvider = provider };
+        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", DocumentStorage = provider, EventStorage = provider };
+        var optionsTenantB = new StoreOptions { DefaultTenantId = "tenant-b", DocumentStorage = provider, EventStorage = provider };
 
-        using (var sessionA = new DocumentSession(provider, optionsTenantA, "tenant-a"))
+        using (var sessionA = new DocumentSession(provider, provider, optionsTenantA, "tenant-a"))
         {
             sessionA.Store(new SecureDocument(docId1, "Secret A1"));
             sessionA.Store(new SecureDocument(docId2, "Secret A2"));
@@ -51,7 +51,7 @@ public sealed class SecurityTests
         }
 
         // Act - Tenant B attempts to load Tenant A's documents
-        using var sessionB = new DocumentSession(provider, optionsTenantB, "tenant-b");
+        using var sessionB = new DocumentSession(provider, provider, optionsTenantB, "tenant-b");
         var results = await sessionB.LoadManyAsync<SecureDocument>(new[] { docId1, docId2 }, ct: TestContext.Current.CancellationToken);
 
         // Assert
@@ -64,17 +64,17 @@ public sealed class SecurityTests
     {
         // Arrange
         var provider = new InMemoryStorageProvider();
-        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", StorageProvider = provider };
-        var optionsTenantB = new StoreOptions { DefaultTenantId = "tenant-b", StorageProvider = provider };
+        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", DocumentStorage = provider, EventStorage = provider };
+        var optionsTenantB = new StoreOptions { DefaultTenantId = "tenant-b", DocumentStorage = provider, EventStorage = provider };
 
-        using (var sessionA = new DocumentSession(provider, optionsTenantA, "tenant-a"))
+        using (var sessionA = new DocumentSession(provider, provider, optionsTenantA, "tenant-a"))
         {
             sessionA.Events.StartStream<BankAccountAggregate>(streamId, new SecureEvent(streamId, "Confidential A"));
             await sessionA.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         // Act - Tenant B attempts to fetch Tenant A's stream
-        using var sessionB = new DocumentSession(provider, optionsTenantB, "tenant-b");
+        using var sessionB = new DocumentSession(provider, provider, optionsTenantB, "tenant-b");
         var eventsB = await sessionB.Events.FetchStreamAsync(streamId, ct: TestContext.Current.CancellationToken);
 
         // Assert
@@ -87,9 +87,9 @@ public sealed class SecurityTests
     {
         // Arrange
         var provider = new InMemoryStorageProvider();
-        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", StorageProvider = provider };
+        var optionsTenantA = new StoreOptions { DefaultTenantId = "tenant-a", DocumentStorage = provider, EventStorage = provider };
 
-        await provider.Documents.UpsertDocumentAsync(new DocumentEnvelope<SecureDocument>
+        await provider.UpsertDocumentAsync(new DocumentEnvelope<SecureDocument>
         {
             Id = docId1,
             PartitionKey = nameof(SecureDocument),
@@ -98,7 +98,7 @@ public sealed class SecurityTests
             Data = new SecureDocument(docId1, "A-1")
         }, TestContext.Current.CancellationToken);
 
-        await provider.Documents.UpsertDocumentAsync(new DocumentEnvelope<SecureDocument>
+        await provider.UpsertDocumentAsync(new DocumentEnvelope<SecureDocument>
         {
             Id = docId2,
             PartitionKey = nameof(SecureDocument),
@@ -107,7 +107,7 @@ public sealed class SecurityTests
             Data = new SecureDocument(docId2, "B-1")
         }, TestContext.Current.CancellationToken);
 
-        using var sessionTenantA = new DocumentSession(provider, optionsTenantA, tenantId: "tenant-a");
+        using var sessionTenantA = new DocumentSession(provider, provider, optionsTenantA, tenantId: "tenant-a");
 
         // Act
         var results = await sessionTenantA.QueryAsync<SecureDocument>(ct: TestContext.Current.CancellationToken);
@@ -131,11 +131,11 @@ public sealed class SecurityTests
             Data = new SecureEvent(streamId, "Tenant A Secret")
         };
 
-        await provider.Events.AppendEventsAsync(streamId, new[] { evtA }, expectedVersion: -1, TestContext.Current.CancellationToken);
+        await provider.AppendEventsAsync(streamId, new[] { evtA }, expectedVersion: -1, TestContext.Current.CancellationToken);
 
         // Act
-        var headerA = await provider.Events.GetStreamHeaderAsync(streamId, tenantId: "tenant-a", ct: TestContext.Current.CancellationToken);
-        var headerB = await provider.Events.GetStreamHeaderAsync(streamId, tenantId: "tenant-b", ct: TestContext.Current.CancellationToken);
+        var headerA = await provider.GetStreamHeaderAsync(streamId, tenantId: "tenant-a", ct: TestContext.Current.CancellationToken);
+        var headerB = await provider.GetStreamHeaderAsync(streamId, tenantId: "tenant-b", ct: TestContext.Current.CancellationToken);
 
         // Assert
         headerA.ShouldNotBeNull();
@@ -149,13 +149,13 @@ public sealed class SecurityTests
     {
         // Arrange
         var provider = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = provider };
+        var options = new StoreOptions { DocumentStorage = provider, EventStorage = provider };
 
-        using var sessionTenantA = new DocumentSession(provider, options, tenantId: "tenant-a");
+        using var sessionTenantA = new DocumentSession(provider, provider, options, tenantId: "tenant-a");
         sessionTenantA.Events.StartStream<BankAccountAggregate>(accountId, new AccountCreatedEvent(accountId, "Charlie", 500m));
         await sessionTenantA.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        using var sessionTenantB = new DocumentSession(provider, options, tenantId: "tenant-b");
+        using var sessionTenantB = new DocumentSession(provider, provider, options, tenantId: "tenant-b");
 
         // Act
         var aggTenantA = await sessionTenantA.Events.AggregateStreamAsync<BankAccountAggregate>(accountId, ct: TestContext.Current.CancellationToken);

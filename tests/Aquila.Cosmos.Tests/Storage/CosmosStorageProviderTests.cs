@@ -79,7 +79,7 @@ public sealed class CosmosStorageProviderTests
             cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(response));
 
-        var result = await _provider.Documents.ReadDocumentAsync<MockDoc>("doc-1", "pk-1", TestContext.Current.CancellationToken);
+        var result = await _provider.ReadDocumentAsync<MockDoc>("doc-1", "pk-1", TestContext.Current.CancellationToken);
 
         result.ShouldNotBeNull();
         result.Id.ShouldBe("doc-1");
@@ -93,7 +93,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.ReadItemAsync<CosmosDocumentEnvelope<MockDoc>>("missing-id", new PartitionKey("pk-1"), cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromException<ItemResponse<CosmosDocumentEnvelope<MockDoc>>>(exception));
 
-        var result = await _provider.Documents.ReadDocumentAsync<MockDoc>("missing-id", "pk-1", TestContext.Current.CancellationToken);
+        var result = await _provider.ReadDocumentAsync<MockDoc>("missing-id", "pk-1", TestContext.Current.CancellationToken);
         result.ShouldBeNull();
     }
 
@@ -109,7 +109,7 @@ public sealed class CosmosStorageProviderTests
             Data = new MockDoc("doc-10", "Upsert Test")
         };
 
-        await _provider.Documents.UpsertDocumentAsync(envelope, TestContext.Current.CancellationToken);
+        await _provider.UpsertDocumentAsync(envelope, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).UpsertItemAsync(
             Arg.Is<CosmosDocumentEnvelope<MockDoc>>(e => e.Id == "doc-10" && e.PartitionKey == "pk-10"),
@@ -120,7 +120,7 @@ public sealed class CosmosStorageProviderTests
     [Fact]
     public async Task DeleteDocumentAsync_Calls_Container_DeleteItemAsync()
     {
-        await _provider.Documents.DeleteDocumentAsync<MockDoc>("doc-99", "pk-99", TestContext.Current.CancellationToken);
+        await _provider.DeleteDocumentAsync<MockDoc>("doc-99", "pk-99", TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).DeleteItemAsync<CosmosDocumentEnvelope<MockDoc>>(
             "doc-99",
@@ -150,7 +150,7 @@ public sealed class CosmosStorageProviderTests
             }
         };
 
-        await _provider.Documents.ExecuteBatchAsync(ops, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(ops, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).UpsertItemAsync(
             Arg.Any<object>(),
@@ -188,7 +188,7 @@ public sealed class CosmosStorageProviderTests
 
         // Expected version is 1, but actual header version is 5 -> MUST throw AquilaConcurrencyException
         await Should.ThrowAsync<AquilaConcurrencyException>(() =>
-            _provider.Events.AppendEventsAsync(streamId, new[] { evt }, expectedVersion: 1, ct: TestContext.Current.CancellationToken));
+            _provider.AppendEventsAsync(streamId, new[] { evt }, expectedVersion: 1, ct: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -203,31 +203,27 @@ public sealed class CosmosStorageProviderTests
             cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromException<ItemResponse<CosmosDocumentEnvelope<EventStreamHeader>>>(exception));
 
-        var header = await _provider.Events.GetStreamHeaderAsync(streamId, ct: TestContext.Current.CancellationToken);
+        var header = await _provider.GetStreamHeaderAsync(streamId, ct: TestContext.Current.CancellationToken);
         header.ShouldBeNull();
-    }
 
-    [Fact]
-    public async Task FetchGlobalEventsAsync_Returns_EmptyList_When_BatchSize_Is_Zero_Or_Negative()
-    {
-        var resultZero = await _provider.Events.FetchGlobalEventsAsync(0, batchSize: 0, ct: TestContext.Current.CancellationToken);
+        var resultZero = await _provider.FetchGlobalEventsAsync(0, batchSize: 0, ct: TestContext.Current.CancellationToken);
         resultZero.ShouldBeEmpty();
 
-        var resultNeg = await _provider.Events.FetchGlobalEventsAsync(0, batchSize: -10, ct: TestContext.Current.CancellationToken);
+        var resultNeg = await _provider.FetchGlobalEventsAsync(0, batchSize: -10, ct: TestContext.Current.CancellationToken);
         resultNeg.ShouldBeEmpty();
     }
 
     [Fact]
     public void StorageProvider_InputValidation_ThrowsExceptions()
     {
-        Should.ThrowAsync<ArgumentException>(() => _provider.Documents.ReadDocumentAsync<MockDoc>("", "pk"));
-        Should.ThrowAsync<ArgumentException>(() => _provider.Documents.ReadDocumentAsync<MockDoc>("id", "   "));
-        Should.ThrowAsync<ArgumentNullException>(() => _provider.Documents.UpsertDocumentAsync<MockDoc>(null!));
-        Should.ThrowAsync<ArgumentException>(() => _provider.Documents.DeleteDocumentAsync<MockDoc>("", "pk"));
-        Should.ThrowAsync<ArgumentException>(() => _provider.Events.AppendEventsAsync("", new List<IEvent>(), 0));
-        Should.ThrowAsync<ArgumentNullException>(() => _provider.Events.AppendEventsAsync("s1", null!, 0));
-        Should.ThrowAsync<ArgumentException>(() => _provider.Events.FetchEventsAsync(""));
-        Should.ThrowAsync<ArgumentException>(() => _provider.Events.GetStreamHeaderAsync(""));
+        Should.ThrowAsync<ArgumentException>(() => _provider.ReadDocumentAsync<MockDoc>("", "pk"));
+        Should.ThrowAsync<ArgumentException>(() => _provider.ReadDocumentAsync<MockDoc>("id", "   "));
+        Should.ThrowAsync<ArgumentNullException>(() => _provider.UpsertDocumentAsync<MockDoc>(null!));
+        Should.ThrowAsync<ArgumentException>(() => _provider.DeleteDocumentAsync<MockDoc>("", "pk"));
+        Should.ThrowAsync<ArgumentException>(() => _provider.AppendEventsAsync("", new List<IEvent>(), 0));
+        Should.ThrowAsync<ArgumentNullException>(() => _provider.AppendEventsAsync("s1", null!, 0));
+        Should.ThrowAsync<ArgumentException>(() => _provider.FetchEventsAsync(""));
+        Should.ThrowAsync<ArgumentException>(() => _provider.GetStreamHeaderAsync(""));
     }
     [Fact]
     public async Task FetchGlobalEventsAsync_Paginates_Filters_And_Limits_BatchSize()
@@ -257,7 +253,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(Arg.Any<QueryDefinition>())
             .Returns(iterator);
 
-        var results = await _provider.Events.FetchGlobalEventsAsync(fromGlobalSequence: 15, batchSize: 1, tenantId: "t1", ct: TestContext.Current.CancellationToken);
+        var results = await _provider.FetchGlobalEventsAsync(fromGlobalSequence: 15, batchSize: 1, tenantId: "t1", ct: TestContext.Current.CancellationToken);
 
         results.Count.ShouldBe(1);
         results[0].GlobalSequence.ShouldBe(20);
@@ -289,7 +285,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(Arg.Any<QueryDefinition>())
             .Returns(iterator);
 
-        var results = await _provider.Events.FetchGlobalEventsAsync(fromGlobalSequence: 0, batchSize: 10, tenantId: "t1", ct: TestContext.Current.CancellationToken);
+        var results = await _provider.FetchGlobalEventsAsync(fromGlobalSequence: 0, batchSize: 10, tenantId: "t1", ct: TestContext.Current.CancellationToken);
 
         results.Count.ShouldBe(1);
         results[0].GlobalSequence.ShouldBe(100);
@@ -317,7 +313,7 @@ public sealed class CosmosStorageProviderTests
             cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(response));
 
-        var (snapshot, version) = await _provider.Events.GetSnapshotAsync<MockDoc>("stream-1", tenantId: "default", ct: TestContext.Current.CancellationToken);
+        var (snapshot, version) = await _provider.GetSnapshotAsync<MockDoc>("stream-1", tenantId: "default", ct: TestContext.Current.CancellationToken);
 
         snapshot.ShouldNotBeNull();
         snapshot.Name.ShouldBe("Snapshot Data");
@@ -333,7 +329,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.ReadItemAsync<CosmosDocumentEnvelope<MockDoc>>("$snapshot_null", new PartitionKey("null"), cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(respNull));
 
-        var resNull = await _provider.Events.GetSnapshotAsync<MockDoc>("null", ct: TestContext.Current.CancellationToken);
+        var resNull = await _provider.GetSnapshotAsync<MockDoc>("null", ct: TestContext.Current.CancellationToken);
         resNull.Snapshot.ShouldBeNull();
         resNull.SnapshotVersion.ShouldBe(0);
 
@@ -344,7 +340,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.ReadItemAsync<CosmosDocumentEnvelope<MockDoc>>("$snapshot_deleted", new PartitionKey("deleted"), cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(respDeleted));
 
-        var resDeleted = await _provider.Events.GetSnapshotAsync<MockDoc>("deleted", ct: TestContext.Current.CancellationToken);
+        var resDeleted = await _provider.GetSnapshotAsync<MockDoc>("deleted", ct: TestContext.Current.CancellationToken);
         resDeleted.Snapshot.ShouldBeNull();
         resDeleted.SnapshotVersion.ShouldBe(0);
 
@@ -355,7 +351,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.ReadItemAsync<CosmosDocumentEnvelope<MockDoc>>("$snapshot_tenant", new PartitionKey("tenant"), cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(respTenant));
 
-        var resTenant = await _provider.Events.GetSnapshotAsync<MockDoc>("tenant", tenantId: "tenant-B", ct: TestContext.Current.CancellationToken);
+        var resTenant = await _provider.GetSnapshotAsync<MockDoc>("tenant", tenantId: "tenant-B", ct: TestContext.Current.CancellationToken);
         resTenant.Snapshot.ShouldBeNull();
         resTenant.SnapshotVersion.ShouldBe(0);
     }
@@ -381,7 +377,7 @@ public sealed class CosmosStorageProviderTests
             cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(response));
 
-        var (snapshot, version) = await _provider.Events.GetSnapshotAsync<MockDoc>("nonnum", ct: TestContext.Current.CancellationToken);
+        var (snapshot, version) = await _provider.GetSnapshotAsync<MockDoc>("nonnum", ct: TestContext.Current.CancellationToken);
 
         snapshot.ShouldNotBeNull();
         version.ShouldBe(0);
@@ -392,7 +388,7 @@ public sealed class CosmosStorageProviderTests
     {
         var snapshotDoc = new MockDoc("snap-2", "Saved Snapshot");
 
-        await _provider.Events.SaveSnapshotAsync("stream-save", 10, snapshotDoc, tenantId: "t1", ct: TestContext.Current.CancellationToken);
+        await _provider.SaveSnapshotAsync("stream-save", 10, snapshotDoc, tenantId: "t1", ct: TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).UpsertItemAsync(
             Arg.Is<CosmosDocumentEnvelope<MockDoc>>(e => e.Id == "$snapshot_stream-save" && e.Version == "10" && e.TenantId == "t1"),
@@ -403,11 +399,11 @@ public sealed class CosmosStorageProviderTests
     [Fact]
     public async Task AppendEventsAsync_EarlyReturn_On_EmptyEvents_And_NegativeExpectedVersion()
     {
-        await _provider.Events.AppendEventsAsync("s-empty", Array.Empty<IEvent>(), expectedVersion: 0, ct: TestContext.Current.CancellationToken);
+        await _provider.AppendEventsAsync("s-empty", Array.Empty<IEvent>(), expectedVersion: 0, ct: TestContext.Current.CancellationToken);
         await _mockContainer.DidNotReceiveWithAnyArgs().UpsertItemAsync<object>(default!, default, cancellationToken: default);
 
         var evt = new EventEnvelope<object> { StreamId = "s-neg", Version = 0, TenantId = "t1", Data = new MockDoc("1", "N") };
-        await _provider.Events.AppendEventsAsync("s-neg", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
+        await _provider.AppendEventsAsync("s-neg", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
 
         await _mockContainer.Received().UpsertItemAsync(
             Arg.Is<CosmosDocumentEnvelope<object>>(e => e.PartitionKey == "s-neg"),
@@ -419,7 +415,7 @@ public sealed class CosmosStorageProviderTests
     public async Task AppendEventsAsync_Assigns_GlobalSequence_When_Zero()
     {
         var evt = new EventEnvelope<object> { StreamId = "s-seq", Version = 0, GlobalSequence = 0, TenantId = "t1", Data = new MockDoc("1", "S") };
-        await _provider.Events.AppendEventsAsync("s-seq", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
+        await _provider.AppendEventsAsync("s-seq", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
 
         evt.GlobalSequence.ShouldBeGreaterThan(0);
     }
@@ -435,7 +431,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.CreateTransactionalBatch(new PartitionKey("s-batch")).Returns(mockBatch);
 
         var evt = new EventEnvelope<object> { StreamId = "s-batch", Version = 0, TenantId = "t1", Data = new MockDoc("1", "Batch") };
-        await _provider.Events.AppendEventsAsync("s-batch", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
+        await _provider.AppendEventsAsync("s-batch", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
 
         _mockContainer.Received(1).CreateTransactionalBatch(new PartitionKey("s-batch"));
         mockBatch.Received().UpsertItem(Arg.Is<CosmosDocumentEnvelope<object>>(e => e.PartitionKey == "s-batch"));
@@ -449,7 +445,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.GetItemLinqQueryable<CosmosDocumentEnvelope<MockDoc>>(Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>(), Arg.Any<CosmosLinqSerializerOptions>())
             .Returns((IOrderedQueryable<CosmosDocumentEnvelope<MockDoc>>)null!);
 
-        var results = await _provider.Documents.QueryDocumentsAsync<MockDoc>(x => x.Id == "1", ct: TestContext.Current.CancellationToken);
+        var results = await _provider.QueryDocumentsAsync<MockDoc>(x => x.Id == "1", ct: TestContext.Current.CancellationToken);
         results.ShouldBeEmpty();
     }
 
@@ -471,7 +467,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<MockDoc>>(Arg.Any<QueryDefinition>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>())
             .Returns(_ => throw new InvalidOperationException("LINQ to Cosmos definition failed"));
 
-        var results = await _provider.Documents.QueryDocumentsAsync<MockDoc>(options: null, ct: TestContext.Current.CancellationToken);
+        var results = await _provider.QueryDocumentsAsync<MockDoc>(options: null, ct: TestContext.Current.CancellationToken);
 
         results.Count.ShouldBe(1);
         results[0].Id.ShouldBe("doc-fb");
@@ -500,7 +496,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(Arg.Any<QueryDefinition>(), requestOptions: Arg.Any<QueryRequestOptions>())
             .Returns(iterator);
 
-        var events = await _provider.Events.FetchEventsAsync("s-fetch", tenantId: "tenant-X", fromVersion: 2, ct: TestContext.Current.CancellationToken);
+        var events = await _provider.FetchEventsAsync("s-fetch", tenantId: "tenant-X", fromVersion: 2, ct: TestContext.Current.CancellationToken);
 
         events.Count.ShouldBe(1);
         events[0].TenantId.ShouldBe("tenant-X");
@@ -535,7 +531,7 @@ public sealed class CosmosStorageProviderTests
             }
         };
 
-        await _provider.Documents.ExecuteBatchAsync(batchOps, TestContext.Current.CancellationToken);
+        await _provider.ExecuteBatchAsync(batchOps, TestContext.Current.CancellationToken);
 
         await _mockContainer.Received(1).PatchItemAsync<CosmosDocumentEnvelope<object>>(
             "p-1",
@@ -552,7 +548,7 @@ public sealed class CosmosStorageProviderTests
         };
 
         await Should.ThrowAsync<NotSupportedException>(() =>
-            _provider.Documents.ExecuteBatchAsync(new[] { invalidPatchOp }, TestContext.Current.CancellationToken));
+            _provider.ExecuteBatchAsync(new[] { invalidPatchOp }, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -565,7 +561,7 @@ public sealed class CosmosStorageProviderTests
         _mockContainer.ReadItemAsync<CosmosDocumentEnvelope<MockDoc>>("d-del", new PartitionKey("pk-del"), cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(response));
 
-        var doc = await _provider.Documents.ReadDocumentAsync<MockDoc>("d-del", "pk-del", TestContext.Current.CancellationToken);
+        var doc = await _provider.ReadDocumentAsync<MockDoc>("d-del", "pk-del", TestContext.Current.CancellationToken);
         doc.ShouldBeNull();
     }
 

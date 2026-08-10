@@ -75,12 +75,12 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
                 Data = doc
             };
 
-            await session.StorageProvider.Documents.UpsertDocumentAsync(envelope, ct);
+            await session.DocumentStorage.UpsertDocumentAsync(envelope, ct);
             session.IdentityMap.Track(docId, doc, envelope);
         }
         else
         {
-            await session.StorageProvider.Documents.DeleteDocumentAsync<TDoc>(docId, pk, ct);
+            await session.DocumentStorage.DeleteDocumentAsync<TDoc>(docId, pk, ct);
             session.IdentityMap.Untrack<TDoc>(docId);
         }
     }

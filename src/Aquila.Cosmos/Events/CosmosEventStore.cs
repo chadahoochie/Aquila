@@ -11,12 +11,12 @@ public sealed class CosmosEventStore : IEventStore
 {
     private readonly CoreEventStore _innerStore;
 
-    public CosmosEventStore(IAquilaStorageProvider storageProvider, string tenantId)
+    public CosmosEventStore(IEventStorageProvider eventStorageProvider, string tenantId)
     {
-        ArgumentNullException.ThrowIfNull(storageProvider);
+        ArgumentNullException.ThrowIfNull(eventStorageProvider);
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
-        _innerStore = new CoreEventStore(storageProvider, tenantId);
+        _innerStore = new CoreEventStore(eventStorageProvider, tenantId);
     }
 
     public CosmosEventStore(Container container, string tenantId)

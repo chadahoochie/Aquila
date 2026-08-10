@@ -47,12 +47,12 @@ public sealed class InMemoryStorageProviderTests
             Data = new AccountCreatedEvent(Guid.NewGuid(), "Alice", 100m)
         };
 
-        await provider.Events.AppendEventsAsync(streamId, new[] { event1 }, 0, TestContext.Current.CancellationToken);
+        await provider.AppendEventsAsync(streamId, new[] { event1 }, 0, TestContext.Current.CancellationToken);
 
-        var events = await provider.Events.FetchEventsAsync(streamId, ct: TestContext.Current.CancellationToken);
+        var events = await provider.FetchEventsAsync(streamId, ct: TestContext.Current.CancellationToken);
         events.Count.ShouldBe(1);
 
-        var header = await provider.Events.GetStreamHeaderAsync(streamId, ct: TestContext.Current.CancellationToken);
+        var header = await provider.GetStreamHeaderAsync(streamId, ct: TestContext.Current.CancellationToken);
         header.ShouldNotBeNull();
         header.Version.ShouldBe(1);
 
@@ -65,7 +65,7 @@ public sealed class InMemoryStorageProviderTests
 
         // Assert optimistic concurrency violation when expectedVersion is wrong
         await Should.ThrowAsync<AquilaConcurrencyException>(() =>
-            provider.Events.AppendEventsAsync(streamId, new[] { event2 }, 99));
+            provider.AppendEventsAsync(streamId, new[] { event2 }, 99));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class InMemoryStorageProviderTests
         var doc = await provider.ReadDocumentAsync<SampleDocument>("missing-id", "missing-pk", TestContext.Current.CancellationToken);
         doc.ShouldBeNull();
 
-        var header = await provider.Events.GetStreamHeaderAsync("non-existent-stream", ct: TestContext.Current.CancellationToken);
+        var header = await provider.GetStreamHeaderAsync("non-existent-stream", ct: TestContext.Current.CancellationToken);
         header.ShouldBeNull();
     }
 
@@ -132,7 +132,7 @@ public sealed class InMemoryStorageProviderTests
         var provider = new InMemoryStorageProvider();
         var streamId = "stream-batch";
 
-        await provider.Events.AppendEventsAsync(streamId, new[]
+        await provider.AppendEventsAsync(streamId, new[]
         {
             new EventEnvelope<AccountCreatedEvent>
             {
@@ -142,10 +142,10 @@ public sealed class InMemoryStorageProviderTests
             }
         }, 0, TestContext.Current.CancellationToken);
 
-        var zeroBatch = await provider.Events.FetchGlobalEventsAsync(0, batchSize: 0, ct: TestContext.Current.CancellationToken);
+        var zeroBatch = await provider.FetchGlobalEventsAsync(0, batchSize: 0, ct: TestContext.Current.CancellationToken);
         zeroBatch.ShouldBeEmpty();
 
-        var negativeBatch = await provider.Events.FetchGlobalEventsAsync(0, batchSize: -5, ct: TestContext.Current.CancellationToken);
+        var negativeBatch = await provider.FetchGlobalEventsAsync(0, batchSize: -5, ct: TestContext.Current.CancellationToken);
         negativeBatch.ShouldBeEmpty();
     }
 
@@ -155,7 +155,7 @@ public sealed class InMemoryStorageProviderTests
         var provider = new InMemoryStorageProvider();
         var streamId = "stream-tenant";
 
-        await provider.Events.AppendEventsAsync(streamId, new[]
+        await provider.AppendEventsAsync(streamId, new[]
         {
             new EventEnvelope<AccountCreatedEvent>
             {
@@ -166,7 +166,7 @@ public sealed class InMemoryStorageProviderTests
             }
         }, 0, TestContext.Current.CancellationToken);
 
-        var header = await provider.Events.GetStreamHeaderAsync(streamId, tenantId: "tenant-b", ct: TestContext.Current.CancellationToken);
+        var header = await provider.GetStreamHeaderAsync(streamId, tenantId: "tenant-b", ct: TestContext.Current.CancellationToken);
 
         header.ShouldBeNull();
     }

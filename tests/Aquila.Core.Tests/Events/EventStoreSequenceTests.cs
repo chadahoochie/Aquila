@@ -24,8 +24,8 @@ public sealed class EventStoreSequenceTests
     public async Task InMemoryStorage_Assigns_Monotonically_Increasing_GlobalSequence_Across_Multiple_Streams()
     {
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var stream1 = Guid.NewGuid();
         var stream2 = Guid.NewGuid();
@@ -54,8 +54,8 @@ public sealed class EventStoreSequenceTests
     public async Task FetchGlobalEventsAsync_Returns_Events_After_FromGlobalSequence_Ordered_Ascending()
     {
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var stream1 = Guid.NewGuid();
         var stream2 = Guid.NewGuid();
@@ -78,8 +78,8 @@ public sealed class EventStoreSequenceTests
     public async Task FetchGlobalEventsAsync_Respects_BatchSize()
     {
         var storage = new InMemoryStorageProvider();
-        var options = new StoreOptions { StorageProvider = storage };
-        using var session = new DocumentSession(storage, options);
+        var options = new StoreOptions { DocumentStorage = storage, EventStorage = storage };
+        using var session = new DocumentSession(storage, storage, options);
 
         var stream1 = Guid.NewGuid();
 
@@ -115,14 +115,14 @@ public sealed class EventStoreSequenceTests
             Data = new AccountCreatedEvent(Guid.NewGuid(), "Bob", 200m)
         };
 
-        await storage.Events.AppendEventsAsync("s1", new[] { evt1 }, 0, TestContext.Current.CancellationToken);
-        await storage.Events.AppendEventsAsync("s2", new[] { evt2 }, 0, TestContext.Current.CancellationToken);
+        await storage.AppendEventsAsync("s1", new[] { evt1 }, 0, TestContext.Current.CancellationToken);
+        await storage.AppendEventsAsync("s2", new[] { evt2 }, 0, TestContext.Current.CancellationToken);
 
-        var tenantAEvents = await storage.Events.FetchGlobalEventsAsync(0, 1000, "tenant-a", TestContext.Current.CancellationToken);
+        var tenantAEvents = await storage.FetchGlobalEventsAsync(0, 1000, "tenant-a", TestContext.Current.CancellationToken);
         tenantAEvents.Count.ShouldBe(1);
         tenantAEvents[0].TenantId.ShouldBe("tenant-a");
 
-        var allEvents = await storage.Events.FetchGlobalEventsAsync(0, 1000, null, TestContext.Current.CancellationToken);
+        var allEvents = await storage.FetchGlobalEventsAsync(0, 1000, null, TestContext.Current.CancellationToken);
         allEvents.Count.ShouldBe(2);
     }
 }

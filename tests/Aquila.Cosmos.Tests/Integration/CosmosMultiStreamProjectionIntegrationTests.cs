@@ -798,11 +798,11 @@ public sealed class CosmosMultiStreamProjectionIntegrationTests
             OrderCount = 3
         };
 
-        await store.Options.StorageProvider.Events.SaveSnapshotAsync(
+        await store.Options.EventStorage.SaveSnapshotAsync(
             streamId, 3, snapshot, "integration-tenant", TestContext.Current.CancellationToken);
 
         // Verify snapshot is stored and readable
-        var (loadedSnapshot, snapshotVersion) = await store.Options.StorageProvider.Events.GetSnapshotAsync<IntegrationCustomerAggregate>(
+        var (loadedSnapshot, snapshotVersion) = await store.Options.EventStorage.GetSnapshotAsync<IntegrationCustomerAggregate>(
             streamId, "integration-tenant", TestContext.Current.CancellationToken);
 
         loadedSnapshot.ShouldNotBeNull();
@@ -924,7 +924,7 @@ public sealed class CosmosMultiStreamProjectionIntegrationTests
         }
 
         // Fetch raw $event documents stored in Cosmos DB container (simulating Cosmos DB Change Feed listener)
-        var rawEventDocs = await store.Options.StorageProvider.Events.FetchGlobalEventsAsync(
+        var rawEventDocs = await store.Options.EventStorage.FetchGlobalEventsAsync(
             0, 100, "integration-tenant", TestContext.Current.CancellationToken);
 
         rawEventDocs.ShouldNotBeEmpty();

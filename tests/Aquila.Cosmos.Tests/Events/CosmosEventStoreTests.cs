@@ -32,11 +32,8 @@ public sealed class CosmosEventStoreTests
     [Fact]
     public async Task CosmosEventStore_Delegates_All_Operations_To_StorageProvider()
     {
-        var storageProvider = Substitute.For<IAquilaStorageProvider>();
         var eventStorage = Substitute.For<IEventStorageProvider>();
-        storageProvider.Events.Returns(eventStorage);
-
-        var cosmosEventStore = new CosmosEventStore(storageProvider, "tenant-cosmos");
+        var cosmosEventStore = new CosmosEventStore(eventStorage, "tenant-cosmos");
         var streamId = Guid.NewGuid();
         var evt1 = new CosmosAccountCreatedEvent(streamId, "Cosmos Owner");
         var evt2 = new CosmosMoneyDepositedEvent(streamId, 100m);

@@ -98,7 +98,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
         var param = Expression.Parameter(envelopeType, "env");
         var lambda = Expression.Lambda(Expression.Constant(true), param);
 
-        var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.StorageProvider.Documents, new object?[] { lambda, null, ct })!;
+        var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.DocumentStorage, new object?[] { lambda, null, ct })!;
         await queryTask.ConfigureAwait(false);
 
         var resultProperty = queryTask.GetType().GetProperty("Result")!;
@@ -115,7 +115,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
             string id = (string)idProp.GetValue(envelope)!;
             string pk = (string)pkProp.GetValue(envelope)!;
 
-            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.StorageProvider.Documents, new object[] { id, pk, ct })!;
+            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.DocumentStorage, new object[] { id, pk, ct })!;
             await deleteTask.ConfigureAwait(false);
         }
     }
@@ -190,7 +190,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
 
         if (minSequence == long.MaxValue) return false;
 
-        var eventStorage = _documentStore.Options.StorageProvider.Events;
+        var eventStorage = _documentStore.Options.EventStorage;
         var batch = await eventStorage.FetchGlobalEventsAsync(minSequence, batchSize: 100, tenantId: null, ct: ct).ConfigureAwait(false);
         if (batch.Count == 0) return false;
 
@@ -220,7 +220,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
         while (hasMore && !ct.IsCancellationRequested)
         {
             var lastSeq = await _checkpointStore.GetCheckpointAsync(proj.Name, ct).ConfigureAwait(false);
-            var eventStorage = _documentStore.Options.StorageProvider.Events;
+            var eventStorage = _documentStore.Options.EventStorage;
             var batch = await eventStorage.FetchGlobalEventsAsync(lastSeq, batchSize: 100, tenantId: null, ct: ct).ConfigureAwait(false);
 
             if (batch.Count == 0)
@@ -282,7 +282,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
                 Data = existingAggregate
             };
 
-            await _documentStore.Options.StorageProvider.Documents.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
+            await _documentStore.Options.DocumentStorage.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
         }
     }
 }

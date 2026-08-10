@@ -23,6 +23,11 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
     private Container Container => _containerProvider();
 
+    public string ProviderName => "AzureCosmosDB";
+    public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+    public void Dispose() { }
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
     public async Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
