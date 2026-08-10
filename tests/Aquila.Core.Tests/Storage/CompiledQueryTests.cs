@@ -149,6 +149,7 @@ public class ClosureViaFieldQuery : ICompiledQuery<UserDoc, UserDoc?>
     }
 }
 
+[Collection("CompiledQueryCacheTests")]
 public class CompiledQueryTests
 {
     private readonly InMemoryStorageProvider _storage;

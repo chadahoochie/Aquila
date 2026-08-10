@@ -4,6 +4,7 @@ using Shouldly;
 
 namespace Aquila.Core.Tests.Queries;
 
+[Collection("CompiledQueryCacheTests")]
 public class CompiledQueryCacheBranchTests
 {
     public CompiledQueryCacheBranchTests()

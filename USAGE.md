@@ -30,6 +30,7 @@ options.Schema.For<Product>()
 ### Partition Key Routing Defaults
 
 - If `.PartitionKey(...)` is omitted, Aquila defaults the partition key to the C# class type name (`typeof(T).Name`).
+- **Hierarchical Partition Keys**: When targeting Azure Cosmos DB containers with hierarchical partition keys, pass pipe-delimited values (e.g. `"TenantA|Region1|Dept5"`). Aquila's `CosmosPartitionKeyHelper` automatically splits the key on `'|'` and uses Cosmos DB's native `PartitionKeyBuilder` to construct multi-level partition keys.
 
 ---
 
