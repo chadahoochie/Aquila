@@ -2,8 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+    <Title>Aquila.Core</Title>
+    <Description>High-performance, Cosmos DB native Document Store and Event Sourcing core contracts, in-memory provider, projections, patch expressions, and compiled queries for .NET.</Description>
   </PropertyGroup>
 
   <ItemGroup>

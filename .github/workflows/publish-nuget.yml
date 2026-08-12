@@ -1,0 +1,91 @@
+name: Publish NuGet Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_base:
+        description: 'Base version prefix (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+        type: string
+      prerelease_suffix:
+        description: 'Prerelease tag suffix (optional, e.g., preview, beta, rc)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build, Pack & Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Calculate Package Version
+        id: versioning
+        run: |
+          BASE_VER="${{ github.event.inputs.version_base }}"
+          RUN_NUM="${{ github.run_number }}"
+          SUFFIX="${{ github.event.inputs.prerelease_suffix }}"
+
+          FULL_VER="${BASE_VER}.${RUN_NUM}"
+          if [ -n "$SUFFIX" ]; then
+            FULL_VER="${FULL_VER}-${SUFFIX}"
+          fi
+
+          echo "VERSION=${FULL_VER}" >> $GITHUB_OUTPUT
+          echo "Calculated package version: ${FULL_VER}"
+
+      - name: Restore Dependencies
+        run: dotnet restore Aquila.slnx
+
+      - name: Build Solution
+        run: dotnet build Aquila.slnx --configuration Release --no-restore
+
+      - name: Run Tests
+        run: dotnet test Aquila.slnx --configuration Release --no-build --verbosity normal
+
+      - name: Pack NuGet Packages
+        run: >
+          dotnet pack Aquila.slnx
+          --configuration Release
+          --no-build
+          /p:PackageVersion="${{ steps.versioning.outputs.VERSION }}"
+          --output ./nupkgs
+
+      - name: Add GitHub Packages Source
+        run: >
+          dotnet nuget add source
+          "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          --name "GitHubPackages"
+          --username "${{ github.repository_owner }}"
+          --password "${{ secrets.GITHUB_TOKEN }}"
+          --store-password-in-clear-text-api-credentials
+
+      - name: Publish to GitHub Packages
+        run: >
+          dotnet nuget push "./nupkgs/*.nupkg"
+          --source "GitHubPackages"
+          --api-key "${{ secrets.GITHUB_TOKEN }}"
+          --skip-duplicate
+
+      - name: Upload Package Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkgs-${{ steps.versioning.outputs.VERSION }}
+          path: './nupkgs/*.nupkg'
+          retention-days: 30
