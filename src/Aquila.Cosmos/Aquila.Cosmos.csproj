@@ -1,4 +1,10 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Title>Aquila.Cosmos</Title>
+    <Description>Azure Cosmos DB storage engine, Change Feed projection daemon, and point patching implementation for the Aquila Document Store and Event Sourcing framework.</Description>
+  </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Aquila.Core\Aquila.Core.csproj" />
@@ -10,11 +16,5 @@
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.10" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
-
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
 
 </Project>
