@@ -73,7 +73,7 @@ jobs:
           --name "GitHubPackages"
           --username "${{ github.repository_owner }}"
           --password "${{ secrets.GITHUB_TOKEN }}"
-          --store-password-in-clear-text-api-credentials
+          --store-password-in-clear-text
 
       - name: Publish to GitHub Packages
         run: >
