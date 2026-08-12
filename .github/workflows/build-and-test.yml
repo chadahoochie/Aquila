@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -27,6 +29,9 @@ jobs:
           dotnet-version: '10.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
+
+      - name: Install ReportGenerator Tool
+        run: dotnet tool install -g dotnet-reportgenerator-globaltool
 
       - name: Restore Dependencies
         run: dotnet restore Aquila.slnx
@@ -41,7 +46,25 @@ jobs:
           --no-build
           --verbosity normal
           --collect:"XPlat Code Coverage"
+          --results-directory ./TestResults
           --logger "trx;LogFileName=test-results.trx"
+
+      - name: Generate Coverage Report
+        if: always()
+        run: >
+          reportgenerator
+          -reports:"TestResults/**/coverage.cobertura.xml"
+          -targetdir:"coverage"
+          -reporttypes:"Cobertura;MarkdownSummaryGithub"
+
+      - name: Display Coverage Summary in Workflow Run
+        if: always()
+        run: cat coverage/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Enforce PR Code Coverage Threshold (>= 85%)
+        run: python3 scripts/check-pr-coverage.py coverage/Cobertura.xml 85.0
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
 
       - name: Upload Test Results
         if: always()
@@ -51,10 +74,10 @@ jobs:
           path: '**/TestResults/*.trx'
           retention-days: 14
 
-      - name: Upload Code Coverage
+      - name: Upload Code Coverage Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: code-coverage
-          path: '**/TestResults/*/coverage.cobertura.xml'
+          name: code-coverage-report
+          path: coverage/
           retention-days: 14
