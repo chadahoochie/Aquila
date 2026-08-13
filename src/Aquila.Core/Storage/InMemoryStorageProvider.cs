@@ -4,6 +4,7 @@ using System.Reflection;
 using Newtonsoft.Json;
 using Aquila.Core.Events;
 using Aquila.Core.Exceptions;
+using Aquila.Core.Serialization;
 
 namespace Aquila.Core.Storage;
 
@@ -382,7 +383,7 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
         ArgumentNullException.ThrowIfNull(snapshot);
 
         var key = $"{tenantId}:{typeof(TAggregate).FullName}:{streamId}";
-        var json = JsonConvert.SerializeObject(snapshot);
+        var json = JsonConvert.SerializeObject(snapshot, PrivateConstructorContractResolver.Settings);
         _snapshots[key] = (json, version, tenantId);
         return Task.CompletedTask;
     }
@@ -394,7 +395,7 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
         var key = $"{tenantId}:{typeof(TAggregate).FullName}:{streamId}";
         if (_snapshots.TryGetValue(key, out var entry) && entry.TenantId == tenantId)
         {
-            var snapshot = JsonConvert.DeserializeObject<TAggregate>(entry.Json);
+            var snapshot = JsonConvert.DeserializeObject<TAggregate>(entry.Json, PrivateConstructorContractResolver.Settings);
             return Task.FromResult<(TAggregate?, long)>((snapshot, entry.SnapshotVersion));
         }
 

@@ -125,10 +125,20 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             var queryDef = queryable.ToQueryDefinition();
             var sql = queryDef.QueryText;
 
-            if (sql.StartsWith("SELECT VALUE root FROM root"))
+            if (sql.StartsWith("SELECT VALUE root"))
             {
-                sql = "SELECT * FROM c" + sql.Substring("SELECT VALUE root FROM root".Length);
-                queryDef = new QueryDefinition(sql);
+                // Only swap the projection clause, not the "root" alias — the WHERE/JOIN clauses
+                // the Cosmos LINQ provider generates for any predicate (e.g. the DocType/IsDeleted
+                // filter above) reference "root" throughout, not just in the FROM clause. Renaming
+                // the alias to "c" here left those later references dangling, so every query with
+                // a WHERE clause failed with "Identifier 'root' could not be resolved" (SC2001).
+                sql = "SELECT *" + sql.Substring("SELECT VALUE root".Length);
+                var rewrittenDef = new QueryDefinition(sql);
+                foreach (var (name, value) in queryDef.GetQueryParameters())
+                {
+                    rewrittenDef = rewrittenDef.WithParameter(name, value);
+                }
+                queryDef = rewrittenDef;
             }
 
             using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(

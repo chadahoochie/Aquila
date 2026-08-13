@@ -1,3 +1,4 @@
+using Aquila.Core.Serialization;
 using System.IO;
 using System.Text;
 using Microsoft.Azure.Cosmos;
@@ -12,11 +13,7 @@ public sealed class AquilaCosmosJsonSerializer : CosmosSerializer
 
     public AquilaCosmosJsonSerializer(JsonSerializerSettings? settings = null)
     {
-        _serializer = JsonSerializer.Create(settings ?? new JsonSerializerSettings
-        {
-            NullValueHandling = NullValueHandling.Ignore,
-            Formatting = Formatting.None
-        });
+        _serializer = JsonSerializer.Create(settings ?? PrivateConstructorContractResolver.Settings);
     }
 
     public override T FromStream<T>(Stream stream)
