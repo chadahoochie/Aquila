@@ -5,6 +5,7 @@ using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
 using Aquila.Core.Queries;
+using Aquila.Core.Serialization;
 using Aquila.Core.Storage;
 
 namespace Aquila.Core.Sessions;
@@ -331,7 +332,7 @@ public sealed class CoreEventStore : IEventStore
             {
                 if (payload is Newtonsoft.Json.Linq.JObject jobj)
                 {
-                    var deserialized = jobj.ToObject(targetParamType);
+                    var deserialized = jobj.ToObject(targetParamType, JsonSerializer.Create(PrivateConstructorContractResolver.Settings));
                     if (deserialized != null)
                     {
                         m.Invoke(aggregate, new[] { deserialized });
@@ -343,7 +344,7 @@ public sealed class CoreEventStore : IEventStore
                     var json = payload.ToString();
                     if (!string.IsNullOrEmpty(json))
                     {
-                        var deserialized = JsonConvert.DeserializeObject(json, targetParamType);
+                        var deserialized = JsonConvert.DeserializeObject(json, targetParamType, PrivateConstructorContractResolver.Settings);
                         if (deserialized != null)
                         {
                             m.Invoke(aggregate, new[] { deserialized });

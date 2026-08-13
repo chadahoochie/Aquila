@@ -1,3 +1,4 @@
+using Aquila.Core.Serialization;
 using Microsoft.Azure.Cosmos;
 using Aquila.Core.Events;
 using Aquila.Core.Exceptions;
@@ -234,7 +235,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                     var rawJson = item.Data.ToString();
                     if (!string.IsNullOrEmpty(rawJson))
                     {
-                        var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                        var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson, PrivateConstructorContractResolver.Settings);
                         if (envelope != null)
                         {
                             _eventTypeResolver.EnsureTypedPayload(envelope);
@@ -293,7 +294,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                     var rawJson = item.Data.ToString();
                     if (!string.IsNullOrEmpty(rawJson))
                     {
-                        var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson);
+                        var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson, PrivateConstructorContractResolver.Settings);
                         if (envelope != null)
                         {
                             _eventTypeResolver.EnsureTypedPayload(envelope);

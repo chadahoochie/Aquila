@@ -1,3 +1,4 @@
+using Aquila.Core.Serialization;
 using Aquila.Core.Events;
 
 namespace Aquila.Cosmos.Storage;
@@ -34,7 +35,7 @@ public sealed class CosmosEventTypeResolver : ICosmosEventTypeResolver
 
         if (targetType == null || rawJson == null) return;
 
-        var deserialized = Newtonsoft.Json.JsonConvert.DeserializeObject(rawJson, targetType);
+        var deserialized = Newtonsoft.Json.JsonConvert.DeserializeObject(rawJson, targetType, PrivateConstructorContractResolver.Settings);
         if (deserialized != null)
         {
             evt.Data = deserialized;
