@@ -299,4 +299,50 @@ public sealed class CosmosStorageSegregationTests
         cosmosProvider.Options.Projections.Container.ShouldBe("Projections_v1");
         cosmosProvider.Options.Projections.Database.ShouldBe("ReadDB");
     }
+
+    [Fact]
+    public void StorageLocationOptions_Setters_And_Validation()
+    {
+        Should.Throw<ArgumentException>(() => new StorageLocationOptions(""));
+        Should.Throw<ArgumentException>(() => new StorageLocationOptions("  "));
+
+        var loc = new StorageLocationOptions("InitialContainer", "InitialDB");
+        loc.Container.ShouldBe("InitialContainer");
+        loc.Database.ShouldBe("InitialDB");
+
+        loc.SetContainer("NewContainer");
+        loc.Container.ShouldBe("NewContainer");
+        Should.Throw<ArgumentException>(() => loc.SetContainer(""));
+        Should.Throw<ArgumentException>(() => loc.SetContainer(" "));
+
+        loc.SetDatabase("NewDB");
+        loc.Database.ShouldBe("NewDB");
+        loc.SetDatabase(null);
+        loc.Database.ShouldBeNull();
+
+        // Resolve fallback
+        loc.Resolve("FallbackDB").ShouldBe(("FallbackDB", "NewContainer"));
+
+        loc.SetDatabase("ExplicitDB");
+        loc.Resolve("FallbackDB").ShouldBe(("ExplicitDB", "NewContainer"));
+
+        loc.SetDatabase("   ");
+        loc.Resolve("FallbackDB").ShouldBe(("FallbackDB", "NewContainer"));
+    }
+
+    [Fact]
+    public void ProjectionStorageOptions_ForType_And_Validation()
+    {
+        var options = new ProjectionStorageOptions();
+
+        options.For(typeof(SegregationOrderProjection), "OrderProjections", "OrderDb");
+        options.Overrides.ContainsKey(typeof(SegregationOrderProjection)).ShouldBeTrue();
+        options.Overrides[typeof(SegregationOrderProjection)].Container.ShouldBe("OrderProjections");
+        options.Overrides[typeof(SegregationOrderProjection)].Database.ShouldBe("OrderDb");
+
+        Should.Throw<ArgumentNullException>(() => options.For(null!, "Cont"));
+        Should.Throw<ArgumentException>(() => options.For(typeof(SegregationOrderProjection), ""));
+        Should.Throw<ArgumentException>(() => options.For<SegregationOrderProjection>(""));
+        Should.Throw<ArgumentException>(() => options.ToContainer(""));
+    }
 }
