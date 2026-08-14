@@ -44,6 +44,18 @@ public sealed class CosmosEventStore : IEventStore
     public void Append(string streamId, long expectedVersion, params object[] events) =>
         _innerStore.Append(streamId, expectedVersion, events);
 
+    public void Append<TAggregate>(Guid streamId, params object[] events) where TAggregate : class =>
+        _innerStore.Append<TAggregate>(streamId, events);
+
+    public void Append<TAggregate>(string streamId, params object[] events) where TAggregate : class =>
+        _innerStore.Append<TAggregate>(streamId, events);
+
+    public void Append<TAggregate>(Guid streamId, long expectedVersion, params object[] events) where TAggregate : class =>
+        _innerStore.Append<TAggregate>(streamId, expectedVersion, events);
+
+    public void Append<TAggregate>(string streamId, long expectedVersion, params object[] events) where TAggregate : class =>
+        _innerStore.Append<TAggregate>(streamId, expectedVersion, events);
+
     public Task<IReadOnlyList<IEvent>> FetchStreamAsync(Guid streamId, long fromVersion = 0, CancellationToken ct = default) =>
         _innerStore.FetchStreamAsync(streamId, fromVersion, ct);
 

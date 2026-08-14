@@ -8,25 +8,32 @@ namespace Aquila.Cosmos.Storage;
 
 public sealed class CosmosEventStorageProvider : IEventStorageProvider
 {
-    private readonly Func<Container> _containerProvider;
+    private readonly Func<Container> _eventContainerProvider;
+    private readonly Func<Container>? _snapshotContainerProvider;
     private readonly ICosmosEventTypeResolver _eventTypeResolver;
     private long _globalSequence;
 
-    public CosmosEventStorageProvider(Func<Container> containerProvider, ICosmosEventTypeResolver? eventTypeResolver = null)
+    public CosmosEventStorageProvider(
+        Func<Container> eventContainerProvider,
+        Func<Container>? snapshotContainerProvider = null,
+        ICosmosEventTypeResolver? eventTypeResolver = null)
     {
-        ArgumentNullException.ThrowIfNull(containerProvider);
-        _containerProvider = containerProvider;
+        ArgumentNullException.ThrowIfNull(eventContainerProvider);
+        _eventContainerProvider = eventContainerProvider;
+        _snapshotContainerProvider = snapshotContainerProvider;
         _eventTypeResolver = eventTypeResolver ?? CosmosEventTypeResolver.Default;
     }
 
     public CosmosEventStorageProvider(Container container, ICosmosEventTypeResolver? eventTypeResolver = null)
     {
         ArgumentNullException.ThrowIfNull(container);
-        _containerProvider = () => container;
+        _eventContainerProvider = () => container;
+        _snapshotContainerProvider = null;
         _eventTypeResolver = eventTypeResolver ?? CosmosEventTypeResolver.Default;
     }
 
-    private Container Container => _containerProvider();
+    private Container EventContainer => _eventContainerProvider();
+    private Container SnapshotContainer => (_snapshotContainerProvider ?? _eventContainerProvider)();
 
     public string ProviderName => "AzureCosmosDB";
     public Task InitializeAsync(CancellationToken ct = default) => InitializeSequenceAsync(ct);
@@ -44,7 +51,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         try
         {
             var queryDef = new QueryDefinition("SELECT VALUE MAX(c.data.GlobalSequence) FROM c WHERE c._docType = '$event'");
-            using var iterator = Container.GetItemQueryIterator<long?>(queryDef);
+            using var iterator = EventContainer.GetItemQueryIterator<long?>(queryDef);
             if (iterator == null) return max;
 
             while (iterator.HasMoreResults)
@@ -88,7 +95,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
         try
         {
-            var batch = Container.CreateTransactionalBatch(partitionKey);
+            var batch = EventContainer.CreateTransactionalBatch(partitionKey);
             if (batch != null)
             {
                 var batchVersion = currentVersion;
@@ -177,7 +184,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 Data = @evt
             };
 
-            await Container.UpsertItemAsync(doc, partitionKey, cancellationToken: ct);
+            await EventContainer.UpsertItemAsync(doc, partitionKey, cancellationToken: ct);
         }
 
         var fallbackHeader = new EventStreamHeader
@@ -200,7 +207,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             Data = fallbackHeader
         };
 
-        await Container.UpsertItemAsync(fallbackHeaderDoc, partitionKey, cancellationToken: ct);
+        await EventContainer.UpsertItemAsync(fallbackHeaderDoc, partitionKey, cancellationToken: ct);
     }
 
     public async Task<IReadOnlyList<IEvent>> FetchEventsAsync(string streamId, string? tenantId = null, long fromVersion = 0, CancellationToken ct = default)
@@ -220,7 +227,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
 
         var events = new List<IEvent>();
-        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+        using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
             queryDef, requestOptions: new QueryRequestOptions { PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(streamId) });
         if (iterator == null) return events;
 
@@ -280,7 +287,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
 
         var events = new List<IEvent>();
-        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef);
+        using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef);
         if (iterator == null) return events;
 
         while (iterator.HasMoreResults && events.Count < batchSize)
@@ -334,7 +341,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
         try
         {
-            var resp = await Container.ReadItemAsync<CosmosDocumentEnvelope<EventStreamHeader>>(
+            var resp = await EventContainer.ReadItemAsync<CosmosDocumentEnvelope<EventStreamHeader>>(
                 targetId,
                 CosmosPartitionKeyHelper.CreatePartitionKey(streamId),
                 cancellationToken: ct);
@@ -351,6 +358,10 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         {
             return null;
         }
+        catch (CosmosException)
+        {
+            return await QueryStreamHeaderAsync(streamId, targetId, tenantId, ct);
+        }
     }
 
     private async Task<EventStreamHeader?> QueryStreamHeaderAsync(string streamId, string targetId, string? tenantId, CancellationToken ct)
@@ -358,8 +369,10 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         var queryDef = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
             .WithParameter("@id", targetId);
 
-        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<EventStreamHeader>>(
+        using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<EventStreamHeader>>(
             queryDef, requestOptions: new QueryRequestOptions { PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(streamId) });
+
+        if (iterator == null) return null;
 
         while (iterator.HasMoreResults)
         {
@@ -396,7 +409,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             Data = snapshot
         };
 
-        await Container.UpsertItemAsync(snapshotDoc, CosmosPartitionKeyHelper.CreatePartitionKey(streamId), cancellationToken: ct);
+        await SnapshotContainer.UpsertItemAsync(snapshotDoc, CosmosPartitionKeyHelper.CreatePartitionKey(streamId), cancellationToken: ct);
     }
 
     public async Task<(TAggregate? Snapshot, long SnapshotVersion)> GetSnapshotAsync<TAggregate>(string streamId, string tenantId = "default", CancellationToken ct = default) where TAggregate : class
@@ -411,7 +424,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
         try
         {
-            var resp = await Container.ReadItemAsync<CosmosDocumentEnvelope<TAggregate>>(
+            var resp = await SnapshotContainer.ReadItemAsync<CosmosDocumentEnvelope<TAggregate>>(
                 targetId,
                 CosmosPartitionKeyHelper.CreatePartitionKey(streamId),
                 cancellationToken: ct);
@@ -433,6 +446,10 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         {
             return (null, 0);
         }
+        catch (CosmosException)
+        {
+            return await QuerySnapshotAsync<TAggregate>(streamId, targetId, tenantId, ct);
+        }
     }
 
     private async Task<(TAggregate? Snapshot, long SnapshotVersion)> QuerySnapshotAsync<TAggregate>(string streamId, string targetId, string tenantId, CancellationToken ct) where TAggregate : class
@@ -440,8 +457,10 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         var queryDef = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
             .WithParameter("@id", targetId);
 
-        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<TAggregate>>(
+        using var iterator = SnapshotContainer.GetItemQueryIterator<CosmosDocumentEnvelope<TAggregate>>(
             queryDef, requestOptions: new QueryRequestOptions { PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(streamId) });
+
+        if (iterator == null) return (null, 0);
 
         while (iterator.HasMoreResults)
         {

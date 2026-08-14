@@ -310,6 +310,7 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
             foreach (var @evt in eventList)
             {
                 header.Version++;
+                @evt.SetVersion(header.Version);
                 if (@evt.GlobalSequence == 0)
                 {
                     @evt.SetGlobalSequence(Interlocked.Increment(ref _globalSequence));

@@ -377,7 +377,37 @@ using Aquila.Cosmos.Extensions; // for AddCosmosDaemon when using Cosmos
 
 builder.Services.AddAquila(options =>
 {
-    options.UseCosmos(connectionString, "ProductionDB", "AquilaDocuments");
+    // Option A: Single shared container (default/legacy)
+    // options.UseCosmos(connectionString, "ProductionDB", "AquilaDocuments");
+
+    // Option B: Segregated storage across Events, Snapshots, Documents, and Projections
+    options.UseCosmos(connectionString, cosmos =>
+    {
+        cosmos.DefaultDatabase = "ProductionDB";
+
+        // 1. Events Store Definition
+        cosmos.ConfigureEvents("EventsContainer", database: "EventsDB");
+
+        // 2. Snapshots Store Definition
+        cosmos.ConfigureSnapshots("SnapshotsContainer", database: "SnapshotsDB");
+
+        // 3. Documents Store Definition
+        cosmos.ConfigureDocuments("DocumentsContainer", database: "ProductionDB");
+
+        // 4. Projections Definition (Default: inherits Documents definition)
+        // Option 4a: Dedicated DB & Container for all projections
+        // cosmos.Projections.ToContainer("ProjectionsContainer", database: "ReadModelsDB");
+
+        // Option 4b: Auto-container per projection
+        cosmos.Projections.AutoContainerPerProjection(database: "ReadModelsDB", type => type.Name);
+
+        // Option 4c: Individual projection override
+        cosmos.Projections.For<CustomerOrderHistoryProjection>("CustomerHistoryContainer", database: "ReadModelsDB");
+    });
+
+    // Seamless snapshotting: Snapshot every 50 events per aggregate
+    options.Events.SnapshotEvery<OrderAggregate>(threshold: 50);
+
     options.Projections.Add<CustomerOrderHistoryProjection>(ProjectionLifecycle.Async);
 });
 
@@ -388,7 +418,7 @@ builder.Services.AddAquilaDaemon();
 builder.Services.AddCosmosDaemon();
 ```
 
-`AddAquilaDaemon()` registers [`ProjectionDaemon`](src/Aquila.Core/Projections/Daemon/ProjectionDaemon.cs) as a `BackgroundService` that continuously polls `IEventStorageProvider.FetchGlobalEventsAsync` in 100-event batches. `AddCosmosDaemon()` registers [`CosmosProjectionDaemon`](src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs), which additionally exposes `ProcessChangeFeedBatchAsync` for wiring into an Azure Cosmos DB Change Feed Processor, deserializing `$event`-tagged change feed items directly instead of re-polling.
+`AddAquilaDaemon()` registers [`ProjectionDaemon`](src/Aquila.Core/Projections/Daemon/ProjectionDaemon.cs) as a `BackgroundService` that continuously polls `IEventStorageProvider.FetchGlobalEventsAsync` in 100-event batches. `AddCosmosDaemon()` registers [`CosmosProjectionDaemon`](src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs), which additionally exposes `ProcessChangeFeedBatchAsync` for wiring into an Azure Cosmos DB Change Feed Processor, deserializing `$event`-tagged change feed items directly from the Events container instead of re-polling.
 
 By default, `IProjectionCheckpointStore` durably persists each projection's `LastCompletedSequence` as a document via [`DocumentStorageProjectionCheckpointStore`](src/Aquila.Core/Projections/Daemon/IProjectionCheckpointStore.cs#L21). Pass a custom factory to `AddAquilaDaemon(checkpointStoreFactory)` to use `InMemoryProjectionCheckpointStore` (testing only — checkpoints do not survive process restarts) or a bespoke store.
 
@@ -445,21 +475,28 @@ Upcasters are chained: [`UpcasterRegistry.Upcast`](src/Aquila.Core/Events/Upcast
 
 ## 12. Aggregate Snapshots
 
-For long-lived streams, replaying every event on every rehydration becomes expensive. Aquila's [`ISnapshotStrategy<TAggregate>`](src/Aquila.Core/Events/ISnapshotStrategy.cs) and the `IEventStorageProvider.SaveSnapshotAsync` / `GetSnapshotAsync` SPI methods let storage providers persist a point-in-time aggregate snapshot alongside the raw event stream.
+For long-lived streams, replaying every event on every rehydration becomes expensive. Aquila provides seamless, automatic point-in-time snapshotting driven by configurable per-aggregate thresholds:
 
 ```csharp
 using Aquila.Core.Events;
 
-// Snapshot every 50 events instead of the default 100
-var strategy = new DefaultSnapshotStrategy<OrderAggregate>(threshold: 50);
+// Automatically persist a snapshot every 50 events for OrderAggregate
+options.Events.SnapshotEvery<OrderAggregate>(threshold: 50);
 
-// Persist manually once you've decided a snapshot is warranted
+// Or register a custom snapshot evaluation strategy
+options.Events.RegisterSnapshotStrategy<OrderAggregate>(new DefaultSnapshotStrategy<OrderAggregate>(threshold: 50));
+```
+
+### Seamless Automatic Persistence
+When `session.SaveChangesAsync()` is called, Aquila automatically evaluates if the committed stream reached the configured threshold. If so, it rehydrates the aggregate up to the current version and persists the snapshot to the configured Snapshots storage container seamlessly without requiring explicit snapshot save calls in application code.
+
+### Manual Snapshot Persistence
+You can also manually save snapshots at any time:
+```csharp
 await storageProvider.Events.SaveSnapshotAsync(streamId, version: 50, aggregate);
 ```
 
-`AggregateStreamAsync<TAggregate>` automatically checks for an existing snapshot via `GetSnapshotAsync` before replaying: if a snapshot exists at or below the requested target version, Aquila rehydrates from the snapshot and only replays events *after* the snapshot's version, rather than the whole stream from version `0`. Both [`InMemoryStorageProvider`](src/Aquila.Core/Storage/InMemoryStorageProvider.cs#L386) and [`CosmosStorageProvider`](src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs#L418) implement snapshot persistence — on Cosmos DB, a snapshot is stored as a `$snapshot_{streamId}` document in the same partition as the stream's events.
-
-`ISnapshotStrategy<TAggregate>.ShouldSnapshot(currentVersion, eventsSinceLastSnapshot)` is a policy hook for callers that want to decide *when* to snapshot (e.g. from an application-level background job); Aquila does not currently invoke it automatically during `SaveChangesAsync` — snapshot writes are an explicit, opt-in operation.
+`AggregateStreamAsync<TAggregate>` automatically checks for an existing snapshot via `GetSnapshotAsync` before replaying: if a snapshot exists at or below the requested target version, Aquila rehydrates from the snapshot and only replays events *after* the snapshot's version, rather than the whole stream from version `0`. Both [`InMemoryStorageProvider`](src/Aquila.Core/Storage/InMemoryStorageProvider.cs#L386) and [`CosmosStorageProvider`](src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs#L418) implement snapshot persistence — on Cosmos DB with segregated storage, snapshots live cleanly in their own dedicated container.
 
 ---
 

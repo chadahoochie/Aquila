@@ -17,6 +17,7 @@ public sealed class CoreEventStore : IEventStore
     private readonly UpcasterRegistry? _upcasters;
     private readonly List<IEvent> _uncommittedEvents = new();
     private readonly Dictionary<string, long> _streamExpectedVersions = new();
+    private readonly ConcurrentDictionary<string, Type> _streamAggregateTypes = new();
 
     private static readonly ConcurrentDictionary<Type, Func<string, long, object, string, IEvent>> _envelopeFactories = new();
     private static readonly ConcurrentDictionary<(Type AggregateType, Type EventType), Action<object, object>?> _applyMethodCache = new();
@@ -49,6 +50,7 @@ public sealed class CoreEventStore : IEventStore
 
     public IReadOnlyList<IEvent> UncommittedEvents => _uncommittedEvents;
     public IReadOnlyDictionary<string, long> StreamExpectedVersions => _streamExpectedVersions;
+    public IReadOnlyDictionary<string, Type> StreamAggregateTypes => _streamAggregateTypes;
 
     public void StartStream<TAggregate>(Guid streamId, params object[] events) where TAggregate : class
     {
@@ -60,6 +62,8 @@ public sealed class CoreEventStore : IEventStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
         ArgumentNullException.ThrowIfNull(events);
+
+        _streamAggregateTypes[streamId] = typeof(TAggregate);
 
         long version = 0;
         foreach (var evt in events)
@@ -110,6 +114,34 @@ public sealed class CoreEventStore : IEventStore
             ApplyHeaders(envelope, evt);
             _uncommittedEvents.Add(envelope);
         }
+    }
+
+    public void Append<TAggregate>(Guid streamId, params object[] events) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        Append<TAggregate>(streamId.ToString(), -1, events);
+    }
+
+    public void Append<TAggregate>(string streamId, params object[] events) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        _streamAggregateTypes[streamId] = typeof(TAggregate);
+        Append(streamId, -1, events);
+    }
+
+    public void Append<TAggregate>(Guid streamId, long expectedVersion, params object[] events) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        Append<TAggregate>(streamId.ToString(), expectedVersion, events);
+    }
+
+    public void Append<TAggregate>(string streamId, long expectedVersion, params object[] events) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        _streamAggregateTypes[streamId] = typeof(TAggregate);
+        Append(streamId, expectedVersion, events);
     }
 
     private void ApplyHeaders(IEvent envelope, object sourceEvt)

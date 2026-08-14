@@ -248,6 +248,11 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             {
                 var expectedVersion = EventStore.StreamExpectedVersions.TryGetValue(group.Key, out var exp) ? exp : -1;
                 await EventStorage.AppendEventsAsync(group.Key, group, expectedVersion, ct);
+
+                if (EventStore.StreamAggregateTypes.TryGetValue(group.Key, out var aggType))
+                {
+                    await CheckAndPersistAutoSnapshotAsync(group.Key, aggType, ct).ConfigureAwait(false);
+                }
             }
         }
 
@@ -315,6 +320,66 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
 
         var upsertTask = (Task)upsertMethod.Invoke(DocumentStorage, new object[] { envelope, ct })!;
         await upsertTask.ConfigureAwait(false);
+
+        if (TrackingMode != TrackingMode.Lightweight)
+        {
+            var trackMethod = typeof(IIdentityMap)
+                .GetMethods()
+                .First(m => m.Name == nameof(IIdentityMap.Track) && m.GetParameters().Length == 3)
+                .MakeGenericMethod(proj.AggregateType);
+            trackMethod.Invoke(InnerIdentityMap, new[] { aggregateId, existingAggregate, envelope });
+        }
+    }
+
+    private async Task CheckAndPersistAutoSnapshotAsync(string streamId, Type aggregateType, CancellationToken ct)
+    {
+        var strategy = Options.Events.GetSnapshotStrategy(aggregateType);
+        if (strategy == null) return;
+
+        var header = await EventStorage.GetStreamHeaderAsync(streamId, TenantId, ct).ConfigureAwait(false);
+        if (header == null || header.Version <= 0) return;
+        long currentVersion = header.Version;
+
+        var getSnapshotMethod = typeof(IEventStorageProvider)
+            .GetMethod(nameof(IEventStorageProvider.GetSnapshotAsync))!
+            .MakeGenericMethod(aggregateType);
+
+        var task = (Task)getSnapshotMethod.Invoke(EventStorage, new object[] { streamId, TenantId, ct })!;
+        await task.ConfigureAwait(false);
+
+        var resultProperty = task.GetType().GetProperty("Result")!;
+        var tuple = resultProperty.GetValue(task)!;
+        var snapshotVersionField = tuple.GetType().GetField("SnapshotVersion") ?? tuple.GetType().GetField("Item2");
+        long lastSnapshotVersion = (long)(snapshotVersionField?.GetValue(tuple) ?? 0L);
+
+        int eventsSinceLastSnapshot = (int)(currentVersion - lastSnapshotVersion);
+
+        var shouldSnapshotMethod = strategy.GetType().GetMethod(nameof(ISnapshotStrategy<object>.ShouldSnapshot))!;
+        bool shouldSnapshot = (bool)shouldSnapshotMethod.Invoke(strategy, new object[] { currentVersion, eventsSinceLastSnapshot })!;
+
+        if (shouldSnapshot)
+        {
+            var aggStreamMethod = typeof(IEventStore)
+                .GetMethods()
+                .First(m => m.Name == nameof(IEventStore.AggregateStreamAsync) && m.GetParameters().Length == 3 && m.GetParameters()[0].ParameterType == typeof(string))
+                .MakeGenericMethod(aggregateType);
+
+            var rehydrateTask = (Task)aggStreamMethod.Invoke(EventStore, new object?[] { streamId, currentVersion, ct })!;
+            await rehydrateTask.ConfigureAwait(false);
+
+            var rehydrateResultProp = rehydrateTask.GetType().GetProperty("Result")!;
+            var aggregateInstance = rehydrateResultProp.GetValue(rehydrateTask);
+
+            if (aggregateInstance != null)
+            {
+                var saveSnapshotMethod = typeof(IEventStorageProvider)
+                    .GetMethod(nameof(IEventStorageProvider.SaveSnapshotAsync))!
+                    .MakeGenericMethod(aggregateType);
+
+                var saveTask = (Task)saveSnapshotMethod.Invoke(EventStorage, new object[] { streamId, currentVersion, aggregateInstance, TenantId, ct })!;
+                await saveTask.ConfigureAwait(false);
+            }
+        }
     }
 
     private void DetectAndQueueDirtyEntities()
