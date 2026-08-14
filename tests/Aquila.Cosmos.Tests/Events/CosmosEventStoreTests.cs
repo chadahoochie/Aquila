@@ -1,3 +1,4 @@
+using Microsoft.Azure.Cosmos;
 using NSubstitute;
 using Shouldly;
 using Aquila.Core.Events;
@@ -45,7 +46,13 @@ public sealed class CosmosEventStoreTests
         cosmosEventStore.Append(streamId, expectedVersion: 2, evt2);
         cosmosEventStore.Append(streamId.ToString(), expectedVersion: 3, evt2);
 
-        cosmosEventStore.UncommittedEvents.Count.ShouldBe(6);
+        // Generic Append overloads
+        cosmosEventStore.Append<CosmosBankAccountAggregate>(streamId, evt2);
+        cosmosEventStore.Append<CosmosBankAccountAggregate>(streamId.ToString(), evt2);
+        cosmosEventStore.Append<CosmosBankAccountAggregate>(streamId, expectedVersion: 4, evt2);
+        cosmosEventStore.Append<CosmosBankAccountAggregate>(streamId.ToString(), expectedVersion: 5, evt2);
+
+        cosmosEventStore.UncommittedEvents.Count.ShouldBe(10);
 
         var eventsList = new List<IEvent>
         {
@@ -70,7 +77,42 @@ public sealed class CosmosEventStoreTests
         var aggregateStr = await cosmosEventStore.AggregateStreamAsync<CosmosBankAccountAggregate>(streamId.ToString(), ct: TestContext.Current.CancellationToken);
         aggregateStr.ShouldNotBeNull();
 
+        var aggregateAtVersion = await cosmosEventStore.AggregateStreamAsync<CosmosBankAccountAggregate>(streamId, version: 1, ct: TestContext.Current.CancellationToken);
+        aggregateAtVersion.ShouldNotBeNull();
+        aggregateAtVersion.Balance.ShouldBe(0m);
+
+        var aggregateStrAtVersion = await cosmosEventStore.AggregateStreamAsync<CosmosBankAccountAggregate>(streamId.ToString(), version: 1, ct: TestContext.Current.CancellationToken);
+        aggregateStrAtVersion.ShouldNotBeNull();
+        aggregateStrAtVersion.Balance.ShouldBe(0m);
+
+        eventStorage.FetchGlobalEventsAsync(0, 50, "tenant-cosmos", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<IEvent>>(eventsList));
+
+        var globalEvents = await cosmosEventStore.FetchGlobalEventsAsync(0, 50, TestContext.Current.CancellationToken);
+        globalEvents.Count.ShouldBe(2);
+
         cosmosEventStore.ClearUncommittedEvents();
         cosmosEventStore.UncommittedEvents.Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public void CosmosEventStore_Constructor_Validates_Arguments()
+    {
+        Should.Throw<ArgumentNullException>(() => new CosmosEventStore((IEventStorageProvider)null!, "tenant"));
+        Should.Throw<ArgumentException>(() => new CosmosEventStore(Substitute.For<IEventStorageProvider>(), ""));
+        Should.Throw<ArgumentException>(() => new CosmosEventStore(Substitute.For<IEventStorageProvider>(), "  "));
+    }
+
+    [Fact]
+    public void CosmosEventStore_Container_Constructor_Initializes()
+    {
+        var mockClient = Substitute.For<CosmosClient>();
+        var mockDb = Substitute.For<Database>();
+        mockDb.Client.Returns(mockClient);
+        var mockContainer = Substitute.For<Container>();
+        mockContainer.Database.Returns(mockDb);
+
+        var store = new CosmosEventStore(mockContainer, "tenant-1");
+        store.ShouldNotBeNull();
     }
 }

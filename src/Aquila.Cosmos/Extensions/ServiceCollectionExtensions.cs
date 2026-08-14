@@ -32,6 +32,56 @@ public static class ServiceCollectionExtensions
         return options;
     }
 
+    public static StoreOptions UseCosmos(this StoreOptions options, string connectionString, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var cosmosOptions = new Aquila.Cosmos.Configuration.CosmosStorageOptions();
+        configure(cosmosOptions);
+
+        var provider = new CosmosStorageProvider(connectionString, cosmosOptions, options);
+        options.UseStorageProvider(provider);
+        return options;
+    }
+
+    public static StoreOptions UseCosmos(this StoreOptions options, Microsoft.Azure.Cosmos.CosmosClient client, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var cosmosOptions = new Aquila.Cosmos.Configuration.CosmosStorageOptions();
+        configure(cosmosOptions);
+
+        var provider = new CosmosStorageProvider(client, cosmosOptions, options);
+        options.UseStorageProvider(provider);
+        return options;
+    }
+
+    public static StoreOptions UseCosmos(this StoreOptions options, string connectionString, Aquila.Cosmos.Configuration.CosmosStorageOptions cosmosOptions)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        ArgumentNullException.ThrowIfNull(cosmosOptions);
+
+        var provider = new CosmosStorageProvider(connectionString, cosmosOptions, options);
+        options.UseStorageProvider(provider);
+        return options;
+    }
+
+    public static StoreOptions UseCosmos(this StoreOptions options, Microsoft.Azure.Cosmos.CosmosClient client, Aquila.Cosmos.Configuration.CosmosStorageOptions cosmosOptions)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(cosmosOptions);
+
+        var provider = new CosmosStorageProvider(client, cosmosOptions, options);
+        options.UseStorageProvider(provider);
+        return options;
+    }
+
     public static IServiceCollection AddAquila(this IServiceCollection services, Action<StoreOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);

@@ -1,59 +1,82 @@
 using System.Collections.ObjectModel;
 using System.Linq.Expressions;
 using Microsoft.Azure.Cosmos;
+using Aquila.Core.Configuration;
 using Aquila.Core.Events;
 using Aquila.Core.Storage;
+using Aquila.Cosmos.Configuration;
 
 namespace Aquila.Cosmos.Storage;
 
 public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStorageProvider
 {
     private readonly CosmosClient _client;
-    private Container _container = null!;
-    private readonly string _databaseName;
-    private readonly string _containerName;
+    private readonly CosmosContainerResolver _resolver;
     private readonly bool _ownsClient;
 
     private readonly CosmosDocumentStorageProvider _documents;
     private readonly CosmosEventStorageProvider _events;
 
     public string ProviderName => "AzureCosmosDB";
+    public CosmosStorageOptions Options => _resolver.Options;
+    public CosmosContainerResolver Resolver => _resolver;
 
-    public CosmosStorageProvider(string connectionString, string databaseName = "AquilaDB", string containerName = "Documents", ICosmosEventTypeResolver? eventTypeResolver = null)
+    public CosmosStorageProvider(
+        string connectionString,
+        CosmosStorageOptions options,
+        StoreOptions? storeOptions = null,
+        ICosmosEventTypeResolver? eventTypeResolver = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
-        ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(containerName);
+        ArgumentNullException.ThrowIfNull(options);
 
-        _databaseName = databaseName;
-        _containerName = containerName;
         _client = new CosmosClient(connectionString, new CosmosClientOptions
         {
             ConnectionMode = ConnectionMode.Direct,
             Serializer = new AquilaCosmosJsonSerializer()
         });
         _ownsClient = true;
+        _resolver = new CosmosContainerResolver(_client, options, storeOptions);
 
-        _documents = new CosmosDocumentStorageProvider(() => Container);
-        _events = new CosmosEventStorageProvider(() => Container, eventTypeResolver);
+        _documents = new CosmosDocumentStorageProvider(type => _resolver.GetContainerForDocumentType(type));
+        _events = new CosmosEventStorageProvider(() => _resolver.GetEventsContainer(), () => _resolver.GetSnapshotsContainer(), eventTypeResolver);
+    }
+
+    public CosmosStorageProvider(
+        CosmosClient client,
+        CosmosStorageOptions options,
+        StoreOptions? storeOptions = null,
+        ICosmosEventTypeResolver? eventTypeResolver = null)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(options);
+
+        _client = client;
+        _ownsClient = false;
+        _resolver = new CosmosContainerResolver(_client, options, storeOptions);
+
+        _documents = new CosmosDocumentStorageProvider(type => _resolver.GetContainerForDocumentType(type));
+        _events = new CosmosEventStorageProvider(() => _resolver.GetEventsContainer(), () => _resolver.GetSnapshotsContainer(), eventTypeResolver);
+    }
+
+    public CosmosStorageProvider(string connectionString, string databaseName = "AquilaDB", string containerName = "Documents", ICosmosEventTypeResolver? eventTypeResolver = null)
+        : this(connectionString, CreateLegacyOptions(databaseName, containerName), null, eventTypeResolver)
+    {
     }
 
     public CosmosStorageProvider(CosmosClient client, string databaseName = "AquilaDB", string containerName = "Documents", ICosmosEventTypeResolver? eventTypeResolver = null)
+        : this(client, CreateLegacyOptions(databaseName, containerName), null, eventTypeResolver)
     {
-        ArgumentNullException.ThrowIfNull(client);
-        ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(containerName);
-
-        _client = client;
-        _databaseName = databaseName;
-        _containerName = containerName;
-        _ownsClient = false;
-
-        _documents = new CosmosDocumentStorageProvider(() => Container);
-        _events = new CosmosEventStorageProvider(() => Container, eventTypeResolver);
     }
 
-    private Container Container => _container ??= _client.GetContainer(_databaseName, _containerName);
+    private static CosmosStorageOptions CreateLegacyOptions(string databaseName, string containerName)
+    {
+        var options = new CosmosStorageOptions { DefaultDatabase = databaseName };
+        options.EventsLocation(containerName, databaseName);
+        options.SnapshotsLocation(containerName, databaseName);
+        options.DocumentsLocation(containerName, databaseName);
+        return options;
+    }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -62,13 +85,46 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
 
     public async Task InitializeAsync(ContainerProperties? customProperties, CancellationToken ct = default)
     {
-        var db = await _client.CreateDatabaseIfNotExistsAsync(_databaseName, cancellationToken: ct).ConfigureAwait(false);
+        var configuredContainers = _resolver.GetAllConfiguredContainers();
+        var uniqueDatabases = configuredContainers.Select(c => c.Database).Distinct().ToList();
 
-        var properties = customProperties ?? CreateDefaultContainerProperties(_containerName);
-        var containerResp = await db.Database.CreateContainerIfNotExistsAsync(properties, cancellationToken: ct).ConfigureAwait(false);
-        _container = containerResp.Container;
+        var dbClients = new Dictionary<string, Database>();
+        foreach (var dbName in uniqueDatabases)
+        {
+            var dbResp = await _client.CreateDatabaseIfNotExistsAsync(dbName, cancellationToken: ct).ConfigureAwait(false);
+            dbClients[dbName] = dbResp.Database;
+        }
+
+        foreach (var (dbName, containerName, isEvents, isSnapshots) in configuredContainers)
+        {
+            var db = dbClients[dbName];
+            var props = customProperties ?? (isEvents
+                ? CreateDefaultEventsContainerProperties(containerName)
+                : CreateDefaultContainerProperties(containerName));
+
+            await db.CreateContainerIfNotExistsAsync(props, cancellationToken: ct).ConfigureAwait(false);
+        }
 
         await _events.InitializeSequenceAsync(ct).ConfigureAwait(false);
+    }
+
+    public static ContainerProperties CreateDefaultEventsContainerProperties(string containerName, string partitionKeyPath = "/pk")
+    {
+        var props = new ContainerProperties(containerName, partitionKeyPath);
+
+        props.IndexingPolicy.CompositeIndexes.Add(new Collection<CompositePath>
+        {
+            new CompositePath { Path = "/_docType", Order = CompositePathSortOrder.Ascending },
+            new CompositePath { Path = "/_tenantId", Order = CompositePathSortOrder.Ascending }
+        });
+
+        props.IndexingPolicy.CompositeIndexes.Add(new Collection<CompositePath>
+        {
+            new CompositePath { Path = "/_docType", Order = CompositePathSortOrder.Ascending },
+            new CompositePath { Path = "/data/GlobalSequence", Order = CompositePathSortOrder.Ascending }
+        });
+
+        return props;
     }
 
     public static ContainerProperties CreateDefaultContainerProperties(string containerName, string partitionKeyPath = "/pk")

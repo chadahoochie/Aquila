@@ -86,4 +86,59 @@ public sealed class SnapshotTests
         otherTenantSnapshot.ShouldBeNull();
         otherVersion.ShouldBe(0);
     }
+
+    [Fact]
+    public async Task DocumentSession_SaveChangesAsync_AutomaticallyPersistsSnapshot_WhenThresholdReached()
+    {
+        var storage = new InMemoryStorageProvider();
+        var options = new StoreOptions
+        {
+            DocumentStorage = storage,
+            EventStorage = storage
+        };
+        options.Events.SnapshotEvery<SnapshotTestAggregate>(threshold: 3);
+
+        using var session = new DocumentSession(storage, storage, options);
+        var streamId = Guid.NewGuid().ToString();
+
+        // Start stream with 3 events, reaching threshold 3
+        session.Events.StartStream<SnapshotTestAggregate>(
+            streamId,
+            new SnapshotTestEvent(10),
+            new SnapshotTestEvent(20),
+            new SnapshotTestEvent(30));
+
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        // Snapshot should now be automatically saved at Version 3 with TotalAmount = 60
+        var (snapshot, snapshotVersion) = await storage.GetSnapshotAsync<SnapshotTestAggregate>(streamId, ct: TestContext.Current.CancellationToken);
+        snapshot.ShouldNotBeNull();
+        snapshot.TotalAmount.ShouldBe(60);
+        snapshotVersion.ShouldBe(3);
+
+        // Append 2 more events (total 5, events since last snapshot = 2 < 3) -> should not snapshot yet
+        session.Events.Append<SnapshotTestAggregate>(
+            streamId,
+            new SnapshotTestEvent(5),
+            new SnapshotTestEvent(5));
+
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var (snapshotAfter2, verAfter2) = await storage.GetSnapshotAsync<SnapshotTestAggregate>(streamId, ct: TestContext.Current.CancellationToken);
+        snapshotAfter2.ShouldNotBeNull();
+        snapshotAfter2.TotalAmount.ShouldBe(60);
+        verAfter2.ShouldBe(3);
+
+        // Append 1 more event (events since last snapshot = 3 >= 3) -> should trigger new snapshot at version 6 with TotalAmount = 70
+        session.Events.Append<SnapshotTestAggregate>(
+            streamId,
+            new SnapshotTestEvent(5));
+
+        await session.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var (snapshotAfter3, verAfter3) = await storage.GetSnapshotAsync<SnapshotTestAggregate>(streamId, ct: TestContext.Current.CancellationToken);
+        snapshotAfter3.ShouldNotBeNull();
+        snapshotAfter3.TotalAmount.ShouldBe(75);
+        verAfter3.ShouldBe(6);
+    }
 }

@@ -165,6 +165,9 @@ public sealed class ProjectionRegistration
 public sealed class EventRegistration
 {
     public UpcasterRegistry Upcasters { get; } = new();
+    private readonly ConcurrentDictionary<Type, object> _snapshotStrategies = new();
+
+    public IReadOnlyDictionary<Type, object> SnapshotStrategies => _snapshotStrategies;
 
     public void RegisterUpcaster<TUpcaster>() where TUpcaster : IEventUpcaster, new()
     {
@@ -175,6 +178,31 @@ public sealed class EventRegistration
     {
         ArgumentNullException.ThrowIfNull(upcaster);
         Upcasters.Register(upcaster);
+    }
+
+    public void SnapshotEvery<TAggregate>(int threshold) where TAggregate : class
+    {
+        if (threshold <= 0) throw new ArgumentOutOfRangeException(nameof(threshold), "Threshold must be greater than zero.");
+        _snapshotStrategies[typeof(TAggregate)] = new DefaultSnapshotStrategy<TAggregate>(threshold);
+    }
+
+    public void RegisterSnapshotStrategy<TAggregate>(ISnapshotStrategy<TAggregate> strategy) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+        _snapshotStrategies[typeof(TAggregate)] = strategy;
+    }
+
+    public ISnapshotStrategy<TAggregate>? GetSnapshotStrategy<TAggregate>() where TAggregate : class
+    {
+        return _snapshotStrategies.TryGetValue(typeof(TAggregate), out var strategy)
+            ? (ISnapshotStrategy<TAggregate>)strategy
+            : null;
+    }
+
+    public object? GetSnapshotStrategy(Type aggregateType)
+    {
+        ArgumentNullException.ThrowIfNull(aggregateType);
+        return _snapshotStrategies.TryGetValue(aggregateType, out var strategy) ? strategy : null;
     }
 }
 

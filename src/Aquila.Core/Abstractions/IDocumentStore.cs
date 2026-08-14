@@ -21,6 +21,11 @@ public interface IEventStore
     void Append(Guid streamId, long expectedVersion, params object[] events);
     void Append(string streamId, long expectedVersion, params object[] events);
 
+    void Append<TAggregate>(Guid streamId, params object[] events) where TAggregate : class;
+    void Append<TAggregate>(string streamId, params object[] events) where TAggregate : class;
+    void Append<TAggregate>(Guid streamId, long expectedVersion, params object[] events) where TAggregate : class;
+    void Append<TAggregate>(string streamId, long expectedVersion, params object[] events) where TAggregate : class;
+
     Task<IReadOnlyList<IEvent>> FetchStreamAsync(Guid streamId, long fromVersion = 0, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchStreamAsync(string streamId, long fromVersion = 0, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default);

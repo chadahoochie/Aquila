@@ -37,12 +37,19 @@ using Microsoft.Extensions.DependencyInjection;
 
 services.AddAquila(options =>
 {
-    // Cosmos DB storage provider configuration
-    options.UseCosmos(
-        connectionString: configuration.GetConnectionString("CosmosDb")!,
-        databaseName: "ProductionDB",
-        containerName: "AquilaDocuments"
-    );
+    // Cosmos DB storage provider configuration (segregated or shared)
+    options.UseCosmos(configuration.GetConnectionString("CosmosDb")!, cosmos =>
+    {
+        cosmos.DefaultDatabase = "ProductionDB";
+        cosmos.ConfigureEvents("EventsContainer", "EventsDB");
+        cosmos.ConfigureSnapshots("SnapshotsContainer", "SnapshotsDB");
+        cosmos.ConfigureDocuments("DocumentsContainer", "ProductionDB");
+        cosmos.Projections.ToContainer("ProjectionsContainer", "ReadModelsDB");
+        // Or auto-container per projection: cosmos.Projections.AutoContainerPerProjection("ReadModelsDB");
+    });
+
+    // Seamless aggregate snapshotting every N events
+    options.Events.SnapshotEvery<OrderAggregate>(threshold: 50);
 
     options.DefaultTenantId = "tenant-primary";
 

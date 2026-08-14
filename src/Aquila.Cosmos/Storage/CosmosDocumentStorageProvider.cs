@@ -7,7 +7,8 @@ namespace Aquila.Cosmos.Storage;
 
 public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 {
-    private readonly Func<Container> _containerProvider;
+    private readonly Func<Container>? _containerProvider;
+    private readonly Func<Type, Container>? _typeContainerResolver;
 
     public CosmosDocumentStorageProvider(Func<Container> containerProvider)
     {
@@ -21,7 +22,14 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
         _containerProvider = () => container;
     }
 
-    private Container Container => _containerProvider();
+    public CosmosDocumentStorageProvider(Func<Type, Container> typeContainerResolver)
+    {
+        ArgumentNullException.ThrowIfNull(typeContainerResolver);
+        _typeContainerResolver = typeContainerResolver;
+    }
+
+    private Container GetContainer<T>() => _typeContainerResolver != null ? _typeContainerResolver(typeof(T)) : _containerProvider!();
+    private Container GetContainer(Type type) => _typeContainerResolver != null ? _typeContainerResolver(type) : _containerProvider!();
 
     public string ProviderName => "AzureCosmosDB";
     public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -40,7 +48,8 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
         try
         {
-            var response = await Container.ReadItemAsync<CosmosDocumentEnvelope<T>>(
+            var container = GetContainer<T>();
+            var response = await container.ReadItemAsync<CosmosDocumentEnvelope<T>>(
                 id,
                 CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey),
                 cancellationToken: ct);
@@ -57,10 +66,11 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
     private async Task<DocumentEnvelope<T>?> QuerySingleDocumentAsync<T>(string id, string partitionKey, CancellationToken ct) where T : class
     {
+        var container = GetContainer<T>();
         var queryDef = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
             .WithParameter("@id", id);
 
-        using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
+        using var iterator = container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
             queryDef, requestOptions: new QueryRequestOptions { PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey) });
 
         while (iterator.HasMoreResults)
@@ -83,6 +93,7 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
         QueryOptions? options = null,
         CancellationToken ct = default) where T : class
     {
+        var container = GetContainer<T>();
         var requestOptions = new QueryRequestOptions();
         if (options != null)
         {
@@ -97,7 +108,7 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
         }
 
         var docType = typeof(T).Name;
-        IQueryable<CosmosDocumentEnvelope<T>>? queryable = Container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>(
+        IQueryable<CosmosDocumentEnvelope<T>>? queryable = container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>(
             false,
             options?.ContinuationToken,
             requestOptions);
@@ -141,7 +152,7 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                 queryDef = rewrittenDef;
             }
 
-            using var iterator = Container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
+            using var iterator = container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
                 queryDef,
                 continuationToken: options?.ContinuationToken,
                 requestOptions: requestOptions);
@@ -184,7 +195,8 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             Data = envelope.Data
         };
 
-        await Container.UpsertItemAsync(cosmosEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(envelope.PartitionKey), cancellationToken: ct);
+        var container = GetContainer<T>();
+        await container.UpsertItemAsync(cosmosEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(envelope.PartitionKey), cancellationToken: ct);
     }
 
     public async Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class
@@ -194,7 +206,8 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
         try
         {
-            await Container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct);
+            var container = GetContainer<T>();
+            await container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
         {
@@ -214,11 +227,55 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
             if (op.OperationType == StorageOperationType.Upsert)
             {
-                await Container.UpsertItemAsync(op.Document, pk, cancellationToken: ct);
+                Type? docDataType = null;
+                object itemToUpsert = op.Document!;
+
+                if (op.Document != null)
+                {
+                    var docType = op.Document.GetType();
+                    if (docType.IsGenericType && docType.GetGenericTypeDefinition() == typeof(DocumentEnvelope<>))
+                    {
+                        docDataType = docType.GetGenericArguments()[0];
+                        var dataProp = docType.GetProperty("Data")?.GetValue(op.Document);
+                        var versionProp = docType.GetProperty("Version")?.GetValue(op.Document)?.ToString() ?? "1";
+                        var isDeletedProp = (bool)(docType.GetProperty("IsDeleted")?.GetValue(op.Document) ?? false);
+                        var tenantIdProp = docType.GetProperty("TenantId")?.GetValue(op.Document)?.ToString() ?? "default";
+                        var etagProp = docType.GetProperty("ETag")?.GetValue(op.Document)?.ToString();
+
+                        itemToUpsert = new CosmosDocumentEnvelope<object>
+                        {
+                            Id = op.Id,
+                            PartitionKey = op.PartitionKey,
+                            DocType = op.DocType,
+                            TenantId = tenantIdProp,
+                            IsDeleted = isDeletedProp,
+                            Version = versionProp,
+                            ETag = etagProp,
+                            Data = dataProp!
+                        };
+                    }
+                    else if (op.Document is not CosmosDocumentEnvelope<object>)
+                    {
+                        itemToUpsert = new CosmosDocumentEnvelope<object>
+                        {
+                            Id = op.Id,
+                            PartitionKey = op.PartitionKey,
+                            DocType = op.DocType,
+                            Data = op.Document
+                        };
+                    }
+                }
+
+                var container = docDataType != null
+                    ? GetContainer(docDataType)
+                    : (op.Document != null ? GetContainer(op.Document.GetType()) : (_containerProvider != null ? _containerProvider() : GetContainer(typeof(object))));
+
+                await container.UpsertItemAsync(itemToUpsert, pk, cancellationToken: ct);
             }
             else if (op.OperationType == StorageOperationType.Delete)
             {
-                await Container.DeleteItemAsync<object>(op.Id, pk, cancellationToken: ct);
+                var container = _containerProvider != null ? _containerProvider() : GetContainer(typeof(object));
+                await container.DeleteItemAsync<object>(op.Id, pk, cancellationToken: ct);
             }
             else if (op.OperationType == StorageOperationType.Patch)
             {
@@ -227,8 +284,9 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                     continue;
                 }
 
+                var container = _containerProvider != null ? _containerProvider() : GetContainer(typeof(object));
                 var cosmosPatchOperations = op.PatchOperations.Select(BuildCosmosPatchOperation).ToList();
-                await Container.PatchItemAsync<CosmosDocumentEnvelope<object>>(op.Id, pk, cosmosPatchOperations, cancellationToken: ct);
+                await container.PatchItemAsync<CosmosDocumentEnvelope<object>>(op.Id, pk, cosmosPatchOperations, cancellationToken: ct);
             }
         }
     }
