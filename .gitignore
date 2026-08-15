@@ -40,6 +40,7 @@ bld/
 # Test Results & Coverage
 [Tt]est[Rr]esult*/
 [Aa]tifacts/
+BenchmarkDotNet.Artifacts/
 coverage/
 *.coverage
 *.coveragexml

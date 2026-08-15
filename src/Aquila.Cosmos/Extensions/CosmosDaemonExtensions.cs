@@ -8,9 +8,16 @@ namespace Aquila.Cosmos.Extensions
 {
     public static class CosmosDaemonExtensions
     {
-        public static IServiceCollection AddCosmosDaemon(this IServiceCollection services)
+        public static IServiceCollection AddCosmosDaemon(this IServiceCollection services, Action<ProjectionDaemonOptions>? configureOptions = null)
         {
             ArgumentNullException.ThrowIfNull(services);
+
+            if (configureOptions != null)
+            {
+                var daemonOptions = new ProjectionDaemonOptions();
+                configureOptions(daemonOptions);
+                services.AddSingleton(daemonOptions);
+            }
 
             services.AddSingleton<IProjectionCheckpointStore>(sp =>
             {
@@ -22,7 +29,8 @@ namespace Aquila.Cosmos.Extensions
                 new CosmosProjectionDaemon(
                     sp.GetRequiredService<IDocumentStore>(),
                     sp.GetRequiredService<IProjectionCheckpointStore>(),
-                    sp.GetService<Microsoft.Extensions.Logging.ILogger<CosmosProjectionDaemon>>()));
+                    sp.GetService<Microsoft.Extensions.Logging.ILogger<CosmosProjectionDaemon>>(),
+                    sp.GetService<ProjectionDaemonOptions>()));
             services.AddSingleton<IProjectionDaemon>(sp => sp.GetRequiredService<CosmosProjectionDaemon>());
             services.AddHostedService(sp => sp.GetRequiredService<CosmosProjectionDaemon>());
 
@@ -41,8 +49,8 @@ namespace Aquila.Cosmos
 {
     public static class AquilaCosmosDaemonGlobalExtensions
     {
-        public static IServiceCollection AddCosmosDaemon(this IServiceCollection services)
-            => Aquila.Cosmos.Extensions.CosmosDaemonExtensions.AddCosmosDaemon(services);
+        public static IServiceCollection AddCosmosDaemon(this IServiceCollection services, Action<ProjectionDaemonOptions>? configureOptions = null)
+            => Aquila.Cosmos.Extensions.CosmosDaemonExtensions.AddCosmosDaemon(services, configureOptions);
 
         public static StoreOptions AddCosmosDaemon(this StoreOptions options)
             => Aquila.Cosmos.Extensions.CosmosDaemonExtensions.AddCosmosDaemon(options);

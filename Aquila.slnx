@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Aquila.Benchmarks/Aquila.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/build/">
     <File Path="Directory.Build.props" />
   </Folder>

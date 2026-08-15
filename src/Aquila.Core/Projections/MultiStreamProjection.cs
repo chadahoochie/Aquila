@@ -10,6 +10,7 @@ namespace Aquila.Core.Projections;
 public interface IMultiStreamProjection : IProjection
 {
     Type ReadModelType { get; }
+    object? GetIdentity(IEvent @event);
     Task ProcessEventAsync(DocumentSession session, IEvent @event, CancellationToken ct);
 }
 
@@ -28,6 +29,8 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
     public string Name => GetType().Name;
 
     protected abstract TId Identity(IEvent @event);
+
+    public object? GetIdentity(IEvent @event) => Identity(@event);
 
     public abstract bool Apply(IEvent @event, TDoc document);
 

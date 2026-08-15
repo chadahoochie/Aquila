@@ -30,11 +30,7 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentNullException.ThrowIfNull(options);
 
-        _client = new CosmosClient(connectionString, new CosmosClientOptions
-        {
-            ConnectionMode = ConnectionMode.Direct,
-            Serializer = new AquilaCosmosJsonSerializer()
-        });
+        _client = new CosmosClient(connectionString, CreateDefaultClientOptions());
         _ownsClient = true;
         _resolver = new CosmosContainerResolver(_client, options, storeOptions);
 
@@ -69,6 +65,18 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
     {
     }
 
+    public static CosmosClientOptions CreateDefaultClientOptions()
+    {
+        return new CosmosClientOptions
+        {
+            ConnectionMode = ConnectionMode.Direct,
+            AllowBulkExecution = true,
+            MaxRetryAttemptsOnRateLimitedRequests = 9,
+            MaxRetryWaitTimeOnRateLimitedRequests = TimeSpan.FromSeconds(30),
+            Serializer = new AquilaCosmosJsonSerializer()
+        };
+    }
+
     private static CosmosStorageOptions CreateLegacyOptions(string databaseName, string containerName)
     {
         var options = new CosmosStorageOptions { DefaultDatabase = databaseName };
@@ -95,14 +103,21 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
             dbClients[dbName] = dbResp.Database;
         }
 
-        foreach (var (dbName, containerName, isEvents, isSnapshots) in configuredContainers)
+        foreach (var (dbName, containerName, isEvents, isSnapshots, throughput) in configuredContainers)
         {
             var db = dbClients[dbName];
             var props = customProperties ?? (isEvents
                 ? CreateDefaultEventsContainerProperties(containerName)
                 : CreateDefaultContainerProperties(containerName));
 
-            await db.CreateContainerIfNotExistsAsync(props, cancellationToken: ct).ConfigureAwait(false);
+            if (throughput != null)
+            {
+                await db.CreateContainerIfNotExistsAsync(props, throughputProperties: throughput, cancellationToken: ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await db.CreateContainerIfNotExistsAsync(props, cancellationToken: ct).ConfigureAwait(false);
+            }
         }
 
         await _events.InitializeSequenceAsync(ct).ConfigureAwait(false);
@@ -111,6 +126,14 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
     public static ContainerProperties CreateDefaultEventsContainerProperties(string containerName, string partitionKeyPath = "/pk")
     {
         var props = new ContainerProperties(containerName, partitionKeyPath);
+
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/*" });
+        props.IndexingPolicy.ExcludedPaths.Add(new ExcludedPath { Path = "/data/*" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_docType/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_tenantId/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/data/GlobalSequence/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/pk/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/id/?" });
 
         props.IndexingPolicy.CompositeIndexes.Add(new Collection<CompositePath>
         {
@@ -130,6 +153,14 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
     public static ContainerProperties CreateDefaultContainerProperties(string containerName, string partitionKeyPath = "/pk")
     {
         var props = new ContainerProperties(containerName, partitionKeyPath);
+
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/*" });
+        props.IndexingPolicy.ExcludedPaths.Add(new ExcludedPath { Path = "/data/*" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_docType/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_tenantId/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/data/GlobalSequence/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/pk/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/id/?" });
 
         props.IndexingPolicy.CompositeIndexes.Add(new Collection<CompositePath>
         {

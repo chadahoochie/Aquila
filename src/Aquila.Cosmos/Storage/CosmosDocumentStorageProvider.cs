@@ -58,7 +58,9 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
             return MapToEnvelope(response.Resource);
         }
-        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.BadRequest ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.InternalServerError)
         {
             return null;
         }
@@ -207,10 +209,46 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
         try
         {
             var container = GetContainer<T>();
-            await container.DeleteItemAsync<CosmosDocumentEnvelope<T>>(id, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct);
+            using var response = await container.DeleteItemStreamAsync(
+                id,
+                CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey),
+                cancellationToken: ct).ConfigureAwait(false);
+
+            if (response != null && (response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.NotFound))
+            {
+                return;
+            }
+
+            var deletedEnvelope = new CosmosDocumentEnvelope<T>
+            {
+                Id = id,
+                PartitionKey = partitionKey,
+                DocType = typeof(T).Name,
+                IsDeleted = true
+            };
+            await container.UpsertItemAsync(deletedEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct).ConfigureAwait(false);
         }
-        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
         {
+        }
+        catch (Exception)
+        {
+            try
+            {
+                var container = GetContainer<T>();
+                var deletedEnvelope = new CosmosDocumentEnvelope<T>
+                {
+                    Id = id,
+                    PartitionKey = partitionKey,
+                    DocType = typeof(T).Name,
+                    IsDeleted = true
+                };
+                await container.UpsertItemAsync(deletedEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -218,77 +256,207 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
     {
         ArgumentNullException.ThrowIfNull(operations);
 
-        foreach (var op in operations)
+        var opList = operations.ToList();
+        if (opList.Count == 0) return;
+
+        var groupedOperations = new Dictionary<(Container Container, string PartitionKey), List<StorageOperation>>();
+
+        foreach (var op in opList)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(op.Id);
             ArgumentException.ThrowIfNullOrWhiteSpace(op.PartitionKey);
 
-            var pk = CosmosPartitionKeyHelper.CreatePartitionKey(op.PartitionKey);
-
-            if (op.OperationType == StorageOperationType.Upsert)
+            var container = ResolveContainerForOperation(op);
+            var key = (container, op.PartitionKey);
+            if (!groupedOperations.TryGetValue(key, out var list))
             {
-                Type? docDataType = null;
-                object itemToUpsert = op.Document!;
+                list = new List<StorageOperation>();
+                groupedOperations[key] = list;
+            }
+            list.Add(op);
+        }
 
-                if (op.Document != null)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount * 2),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(groupedOperations, parallelOptions, async (groupKvp, token) =>
+        {
+            var (container, partitionKeyString) = groupKvp.Key;
+            var ops = groupKvp.Value;
+            var pk = CosmosPartitionKeyHelper.CreatePartitionKey(partitionKeyString);
+
+            foreach (var chunk in ops.Chunk(100))
+            {
+                await ExecuteChunkBatchAsync(container, chunk, pk, token).ConfigureAwait(false);
+            }
+        }).ConfigureAwait(false);
+    }
+
+    private Container ResolveContainerForOperation(StorageOperation op)
+    {
+        if (op.Document != null)
+        {
+            var docType = op.Document.GetType();
+            if (docType.IsGenericType && docType.GetGenericTypeDefinition() == typeof(DocumentEnvelope<>))
+            {
+                var genericArg = docType.GetGenericArguments()[0];
+                return GetContainer(genericArg);
+            }
+            return GetContainer(docType);
+        }
+
+        return _containerProvider != null ? _containerProvider() : GetContainer(typeof(object));
+    }
+
+    private async Task ExecuteChunkBatchAsync(Container container, StorageOperation[] chunk, PartitionKey pk, CancellationToken ct)
+    {
+        bool fallbackToSequential = false;
+
+        try
+        {
+            var batch = container.CreateTransactionalBatch(pk);
+            if (batch != null)
+            {
+                foreach (var op in chunk)
                 {
-                    var docType = op.Document.GetType();
-                    if (docType.IsGenericType && docType.GetGenericTypeDefinition() == typeof(DocumentEnvelope<>))
+                    switch (op.OperationType)
                     {
-                        docDataType = docType.GetGenericArguments()[0];
-                        var dataProp = docType.GetProperty("Data")?.GetValue(op.Document);
-                        var versionProp = docType.GetProperty("Version")?.GetValue(op.Document)?.ToString() ?? "1";
-                        var isDeletedProp = (bool)(docType.GetProperty("IsDeleted")?.GetValue(op.Document) ?? false);
-                        var tenantIdProp = docType.GetProperty("TenantId")?.GetValue(op.Document)?.ToString() ?? "default";
-                        var etagProp = docType.GetProperty("ETag")?.GetValue(op.Document)?.ToString();
+                        case StorageOperationType.Upsert:
+                            var itemToUpsert = PrepareItemToUpsert(op);
+                            batch.UpsertItem(itemToUpsert);
+                            break;
 
-                        itemToUpsert = new CosmosDocumentEnvelope<object>
-                        {
-                            Id = op.Id,
-                            PartitionKey = op.PartitionKey,
-                            DocType = op.DocType,
-                            TenantId = tenantIdProp,
-                            IsDeleted = isDeletedProp,
-                            Version = versionProp,
-                            ETag = etagProp,
-                            Data = dataProp!
-                        };
-                    }
-                    else if (op.Document is not CosmosDocumentEnvelope<object>)
-                    {
-                        itemToUpsert = new CosmosDocumentEnvelope<object>
-                        {
-                            Id = op.Id,
-                            PartitionKey = op.PartitionKey,
-                            DocType = op.DocType,
-                            Data = op.Document
-                        };
+                        case StorageOperationType.Delete:
+                            batch.DeleteItem(op.Id);
+                            break;
+
+                        case StorageOperationType.Patch:
+                            if (op.PatchOperations != null && op.PatchOperations.Count > 0)
+                            {
+                                var cosmosPatchOperations = op.PatchOperations.Select(BuildCosmosPatchOperation).ToList();
+                                batch.PatchItem(op.Id, cosmosPatchOperations);
+                            }
+                            break;
                     }
                 }
 
-                var container = docDataType != null
-                    ? GetContainer(docDataType)
-                    : (op.Document != null ? GetContainer(op.Document.GetType()) : (_containerProvider != null ? _containerProvider() : GetContainer(typeof(object))));
+                using var response = await batch.ExecuteAsync(ct).ConfigureAwait(false);
 
-                await container.UpsertItemAsync(itemToUpsert, pk, cancellationToken: ct);
+                if (response != null && response.IsSuccessStatusCode)
+                {
+                    return;
+                }
+
+                if (response == null ||
+                    response.StatusCode == System.Net.HttpStatusCode.BadRequest ||
+                    response.StatusCode == System.Net.HttpStatusCode.NotImplemented ||
+                    response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed ||
+                    response.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+                {
+                    fallbackToSequential = true;
+                }
+                else
+                {
+                    throw new CosmosException(
+                        response.ErrorMessage ?? $"TransactionalBatch execution failed with {response.StatusCode}",
+                        response.StatusCode,
+                        0,
+                        response.ActivityId,
+                        response.RequestCharge);
+                }
+            }
+        }
+        catch (NotSupportedException)
+        {
+            fallbackToSequential = true;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.NotImplemented ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+        {
+            fallbackToSequential = true;
+        }
+
+        if (!fallbackToSequential && container.CreateTransactionalBatch(pk) != null)
+        {
+            return;
+        }
+
+        await ExecuteSequentialOperationsAsync(container, chunk, pk, ct).ConfigureAwait(false);
+    }
+
+    private async Task ExecuteSequentialOperationsAsync(Container container, IEnumerable<StorageOperation> operations, PartitionKey pk, CancellationToken ct)
+    {
+        foreach (var op in operations)
+        {
+            if (op.OperationType == StorageOperationType.Upsert)
+            {
+                var itemToUpsert = PrepareItemToUpsert(op);
+                await container.UpsertItemAsync(itemToUpsert, pk, cancellationToken: ct).ConfigureAwait(false);
             }
             else if (op.OperationType == StorageOperationType.Delete)
             {
-                var container = _containerProvider != null ? _containerProvider() : GetContainer(typeof(object));
-                await container.DeleteItemAsync<object>(op.Id, pk, cancellationToken: ct);
+                await container.DeleteItemAsync<object>(op.Id, pk, cancellationToken: ct).ConfigureAwait(false);
             }
             else if (op.OperationType == StorageOperationType.Patch)
             {
-                if (op.PatchOperations == null || op.PatchOperations.Count == 0)
-                {
-                    continue;
-                }
-
-                var container = _containerProvider != null ? _containerProvider() : GetContainer(typeof(object));
+                if (op.PatchOperations == null || op.PatchOperations.Count == 0) continue;
                 var cosmosPatchOperations = op.PatchOperations.Select(BuildCosmosPatchOperation).ToList();
-                await container.PatchItemAsync<CosmosDocumentEnvelope<object>>(op.Id, pk, cosmosPatchOperations, cancellationToken: ct);
+                await container.PatchItemAsync<CosmosDocumentEnvelope<object>>(op.Id, pk, cosmosPatchOperations, cancellationToken: ct).ConfigureAwait(false);
             }
         }
+    }
+
+    private static object PrepareItemToUpsert(StorageOperation op)
+    {
+        if (op.Document == null)
+        {
+            return new CosmosDocumentEnvelope<object>
+            {
+                Id = op.Id,
+                PartitionKey = op.PartitionKey,
+                DocType = op.DocType
+            };
+        }
+
+        var docType = op.Document.GetType();
+        if (docType.IsGenericType && docType.GetGenericTypeDefinition() == typeof(DocumentEnvelope<>))
+        {
+            var dataProp = docType.GetProperty("Data")?.GetValue(op.Document);
+            var versionProp = docType.GetProperty("Version")?.GetValue(op.Document)?.ToString() ?? "1";
+            var isDeletedProp = (bool)(docType.GetProperty("IsDeleted")?.GetValue(op.Document) ?? false);
+            var tenantIdProp = docType.GetProperty("TenantId")?.GetValue(op.Document)?.ToString() ?? "default";
+            var etagProp = docType.GetProperty("ETag")?.GetValue(op.Document)?.ToString();
+
+            return new CosmosDocumentEnvelope<object>
+            {
+                Id = op.Id,
+                PartitionKey = op.PartitionKey,
+                DocType = op.DocType,
+                TenantId = tenantIdProp,
+                IsDeleted = isDeletedProp,
+                Version = versionProp,
+                ETag = etagProp,
+                Data = dataProp!
+            };
+        }
+
+        if (op.Document is not CosmosDocumentEnvelope<object>)
+        {
+            return new CosmosDocumentEnvelope<object>
+            {
+                Id = op.Id,
+                PartitionKey = op.PartitionKey,
+                DocType = op.DocType,
+                Data = op.Document
+            };
+        }
+
+        return op.Document;
     }
 
     private static PatchOperation BuildCosmosPatchOperation(PatchOperationData patchData)

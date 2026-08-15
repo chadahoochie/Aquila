@@ -115,38 +115,41 @@ public sealed class CosmosContainerResolver
     }
 
     /// <summary>
-    /// Collects all unique (Database, Container) pairs currently configured for initialization.
+    /// Collects all unique (Database, Container) pairs currently configured for initialization along with their resolved throughput.
     /// </summary>
-    public IReadOnlyList<(string Database, string Container, bool IsEvents, bool IsSnapshots)> GetAllConfiguredContainers()
+    public IReadOnlyList<(string Database, string Container, bool IsEvents, bool IsSnapshots, ThroughputProperties? Throughput)> GetAllConfiguredContainers()
     {
-        var result = new Dictionary<(string Database, string Container), (bool IsEvents, bool IsSnapshots)>();
+        var result = new Dictionary<(string Database, string Container), (bool IsEvents, bool IsSnapshots, ThroughputProperties? Throughput)>();
+
+        void RegisterContainer(string db, string cont, bool isEvents, bool isSnapshots, ThroughputProperties? throughput)
+        {
+            var key = (db, cont);
+            if (result.TryGetValue(key, out var existing))
+            {
+                result[key] = (
+                    existing.IsEvents || isEvents,
+                    existing.IsSnapshots || isSnapshots,
+                    existing.Throughput ?? throughput);
+            }
+            else
+            {
+                result[key] = (isEvents, isSnapshots, throughput);
+            }
+        }
 
         var (evDb, evCont) = _options.Events.Resolve(_options.DefaultDatabase);
-        result[(evDb, evCont)] = (true, false);
+        RegisterContainer(evDb, evCont, isEvents: true, isSnapshots: false, _options.Events.Throughput?.ToThroughputProperties());
 
         var (snapDb, snapCont) = _options.Snapshots.Resolve(_options.DefaultDatabase);
-        if (result.TryGetValue((snapDb, snapCont), out var existing))
-        {
-            result[(snapDb, snapCont)] = (existing.IsEvents, true);
-        }
-        else
-        {
-            result[(snapDb, snapCont)] = (false, true);
-        }
+        RegisterContainer(snapDb, snapCont, isEvents: false, isSnapshots: true, _options.Snapshots.Throughput?.ToThroughputProperties());
 
         var (docDb, docCont) = _options.Documents.Resolve(_options.DefaultDatabase);
-        if (!result.ContainsKey((docDb, docCont)))
-        {
-            result[(docDb, docCont)] = (false, false);
-        }
+        RegisterContainer(docDb, docCont, isEvents: false, isSnapshots: false, _options.Documents.Throughput?.ToThroughputProperties());
 
         if (_options.Projections.Mode == ProjectionStorageMode.DedicatedContainer && !string.IsNullOrWhiteSpace(_options.Projections.Container))
         {
             var projDb = _options.Projections.Database ?? _options.DefaultDatabase;
-            if (!result.ContainsKey((projDb, _options.Projections.Container)))
-            {
-                result[(projDb, _options.Projections.Container)] = (false, false);
-            }
+            RegisterContainer(projDb, _options.Projections.Container, false, false, _options.Projections.Throughput?.ToThroughputProperties());
         }
         else if (_options.Projections.Mode == ProjectionStorageMode.AutoContainerPerProjection && _storeOptions?.Projections != null)
         {
@@ -154,22 +157,16 @@ public sealed class CosmosContainerResolver
             foreach (var proj in _storeOptions.Projections.Projections)
             {
                 var containerName = _options.Projections.ContainerNameFormatter(proj.GetType());
-                if (!result.ContainsKey((projDb, containerName)))
-                {
-                    result[(projDb, containerName)] = (false, false);
-                }
+                RegisterContainer(projDb, containerName, false, false, _options.Projections.Throughput?.ToThroughputProperties());
             }
         }
 
         foreach (var (type, loc) in _options.Projections.Overrides)
         {
             var (db, cont) = loc.Resolve(_options.Projections.Database ?? _options.DefaultDatabase);
-            if (!result.ContainsKey((db, cont)))
-            {
-                result[(db, cont)] = (false, false);
-            }
+            RegisterContainer(db, cont, false, false, loc.Throughput?.ToThroughputProperties() ?? _options.Projections.Throughput?.ToThroughputProperties());
         }
 
-        return result.Select(kvp => (kvp.Key.Database, kvp.Key.Container, kvp.Value.IsEvents, kvp.Value.IsSnapshots)).ToList();
+        return result.Select(kvp => (kvp.Key.Database, kvp.Key.Container, kvp.Value.IsEvents, kvp.Value.IsSnapshots, kvp.Value.Throughput)).ToList();
     }
 }
