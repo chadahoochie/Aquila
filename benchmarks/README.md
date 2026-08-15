@@ -105,10 +105,35 @@ dotnet run --project benchmarks/Aquila.Benchmarks/Aquila.Benchmarks.csproj -c Re
 ```
 
 ### 4. Exporting Reports
-BenchmarkDotNet automatically exports reports to `./BenchmarkDotNet.Artifacts/results/`:
-- **Markdown summary**: `*report-github.md`
-- **HTML report with charts**: `*report.html`
-- **CSV / JSON raw data**: `*report.csv`, `*report.json`
+BenchmarkDotNet is configured to output GitHub-flavored Markdown reports directly to `./BenchmarkDotNet.Artifacts/results/`:
+- **Markdown report**: `*report-github.md`
+
+### 5. Automated Runner & Baseline Comparison Workflow
+The runner script in `scripts/run-benchmarks.py` automates running benchmarks, preserving the baseline document, calculating delta comparisons (latency % and allocation changes), and producing timestamped report files under `docs/benchmarks/RUN_YYYYMMDD_HHMMSS.md`:
+
+```bash
+# Run benchmarks, compare against BASELINE.md, and create a timestamped report
+python3 scripts/run-benchmarks.py
+
+# Run a specific benchmark suite
+python3 scripts/run-benchmarks.py --filter *Cosmos*
+
+# Fast dry-run validation
+python3 scripts/run-benchmarks.py --dry-run
+
+# Re-aggregate and compare existing results without re-running dotnet
+python3 scripts/run-benchmarks.py --aggregate-only
+
+# Explicitly update/overwrite the master baseline (docs/benchmarks/BASELINE.md)
+python3 scripts/run-benchmarks.py --set-baseline
+```
+
+---
+
+## Baseline Performance Documentation
+
+- **Master Baseline**: [`docs/benchmarks/BASELINE.md`](file:///home/chad/source/dotnet/Aquila/docs/benchmarks/BASELINE.md) — Preserved reference baseline across all 11 benchmark suites.
+- **Run Reports**: `docs/benchmarks/RUN_YYYYMMDD_HHMMSS.md` — Timestamped execution reports with automated $\Delta$ latency and memory comparison tables.
 
 ---
 
@@ -118,3 +143,4 @@ All benchmarks in this suite include:
 - `[MemoryDiagnoser]`: Measures Gen0, Gen1, Gen2 garbage collections and total heap bytes allocated.
 - `[Orderer(SummaryOrderPolicy.FastestToSlowest)]`: Sorts results by median latency for instant readability.
 - `[RankColumn]`: Annotates relative performance tiers.
+
