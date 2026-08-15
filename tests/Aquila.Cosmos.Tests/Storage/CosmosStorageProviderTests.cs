@@ -120,9 +120,18 @@ public sealed class CosmosStorageProviderTests
     [Fact]
     public async Task DeleteDocumentAsync_Calls_Container_DeleteItemAsync()
     {
+        var response = Substitute.For<ResponseMessage>();
+        response.IsSuccessStatusCode.Returns(true);
+
+        _mockContainer.DeleteItemStreamAsync(
+            "doc-99",
+            new PartitionKey("pk-99"),
+            cancellationToken: Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(response));
+
         await _provider.DeleteDocumentAsync<MockDoc>("doc-99", "pk-99", TestContext.Current.CancellationToken);
 
-        await _mockContainer.Received(1).DeleteItemAsync<CosmosDocumentEnvelope<MockDoc>>(
+        await _mockContainer.Received(1).DeleteItemStreamAsync(
             "doc-99",
             new PartitionKey("pk-99"),
             cancellationToken: Arg.Any<CancellationToken>());
@@ -250,7 +259,7 @@ public sealed class CosmosStorageProviderTests
         iterator.ReadNextAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(page1), Task.FromResult(page2));
 
-        _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(Arg.Any<QueryDefinition>())
+        _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(Arg.Any<QueryDefinition>(), requestOptions: Arg.Any<QueryRequestOptions>())
             .Returns(iterator);
 
         var results = await _provider.FetchGlobalEventsAsync(fromGlobalSequence: 15, batchSize: 1, tenantId: "t1", ct: TestContext.Current.CancellationToken);
@@ -282,7 +291,7 @@ public sealed class CosmosStorageProviderTests
         iterator.HasMoreResults.Returns(true, false);
         iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
 
-        _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(Arg.Any<QueryDefinition>())
+        _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(Arg.Any<QueryDefinition>(), requestOptions: Arg.Any<QueryRequestOptions>())
             .Returns(iterator);
 
         var results = await _provider.FetchGlobalEventsAsync(fromGlobalSequence: 0, batchSize: 10, tenantId: "t1", ct: TestContext.Current.CancellationToken);

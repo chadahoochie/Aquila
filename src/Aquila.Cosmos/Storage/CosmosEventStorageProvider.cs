@@ -1,5 +1,6 @@
 using Aquila.Core.Serialization;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Logging;
 using Aquila.Core.Events;
 using Aquila.Core.Exceptions;
 using Aquila.Core.Storage;
@@ -11,25 +12,32 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
     private readonly Func<Container> _eventContainerProvider;
     private readonly Func<Container>? _snapshotContainerProvider;
     private readonly ICosmosEventTypeResolver _eventTypeResolver;
+    private readonly ILogger<CosmosEventStorageProvider>? _logger;
     private long _globalSequence;
 
     public CosmosEventStorageProvider(
         Func<Container> eventContainerProvider,
         Func<Container>? snapshotContainerProvider = null,
-        ICosmosEventTypeResolver? eventTypeResolver = null)
+        ICosmosEventTypeResolver? eventTypeResolver = null,
+        ILogger<CosmosEventStorageProvider>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(eventContainerProvider);
         _eventContainerProvider = eventContainerProvider;
         _snapshotContainerProvider = snapshotContainerProvider;
         _eventTypeResolver = eventTypeResolver ?? CosmosEventTypeResolver.Default;
+        _logger = logger;
     }
 
-    public CosmosEventStorageProvider(Container container, ICosmosEventTypeResolver? eventTypeResolver = null)
+    public CosmosEventStorageProvider(
+        Container container,
+        ICosmosEventTypeResolver? eventTypeResolver = null,
+        ILogger<CosmosEventStorageProvider>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(container);
         _eventContainerProvider = () => container;
         _snapshotContainerProvider = null;
         _eventTypeResolver = eventTypeResolver ?? CosmosEventTypeResolver.Default;
+        _logger = logger;
     }
 
     private Container EventContainer => _eventContainerProvider();
@@ -92,6 +100,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
 
         var partitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(streamId);
+        bool fallbackToSequential = false;
 
         try
         {
@@ -145,14 +154,30 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
                 using var response = await batch.ExecuteAsync(ct).ConfigureAwait(false);
 
-                if (response.IsSuccessStatusCode)
+                if (response != null && response.IsSuccessStatusCode)
                 {
                     return;
                 }
 
-                if (response.StatusCode == System.Net.HttpStatusCode.PreconditionFailed || response.StatusCode == System.Net.HttpStatusCode.Conflict)
+                if (response == null)
+                {
+                    fallbackToSequential = true;
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.PreconditionFailed || response.StatusCode == System.Net.HttpStatusCode.Conflict)
                 {
                     throw new AquilaConcurrencyException(streamId, expectedVersion.ToString(), currentVersion.ToString());
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.BadRequest ||
+                         response.StatusCode == System.Net.HttpStatusCode.NotImplemented ||
+                         response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed ||
+                         response.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+                {
+                    _logger?.LogWarning("TransactionalBatch returned {StatusCode}. Falling back to sequential upserts.", response.StatusCode);
+                    fallbackToSequential = true;
+                }
+                else
+                {
+                    throw new CosmosException(response.ErrorMessage ?? $"Batch execution failed with {response.StatusCode}", response.StatusCode, 0, response.ActivityId, response.RequestCharge);
                 }
             }
         }
@@ -160,9 +185,23 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         {
             throw;
         }
-        catch
+        catch (NotSupportedException ex)
         {
-            // Fall through to sequential upserts for environments/emulators without TransactionalBatch support
+            _logger?.LogWarning(ex, "TransactionalBatch not supported. Falling back to sequential upserts.");
+            fallbackToSequential = true;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.NotImplemented ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+        {
+            _logger?.LogWarning(ex, "TransactionalBatch returned {StatusCode}. Falling back to sequential upserts.", ex.StatusCode);
+            fallbackToSequential = true;
+        }
+
+        if (!fallbackToSequential && EventContainer.CreateTransactionalBatch(partitionKey) != null)
+        {
+            return;
         }
 
         foreach (var @evt in eventList)
@@ -277,10 +316,147 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
 
         var queryText = string.IsNullOrEmpty(tenantId)
-            ? "SELECT * FROM c WHERE c._docType = '$event'"
-            : "SELECT * FROM c WHERE c._docType = '$event' AND c._tenantId = @tenantId";
+            ? "SELECT * FROM c WHERE c._docType = '$event' AND c.data.GlobalSequence > @fromGlobalSequence ORDER BY c.data.GlobalSequence"
+            : "SELECT * FROM c WHERE c._docType = '$event' AND c._tenantId = @tenantId AND c.data.GlobalSequence > @fromGlobalSequence ORDER BY c.data.GlobalSequence";
 
-        var queryDef = new QueryDefinition(queryText);
+        var queryDef = new QueryDefinition(queryText)
+            .WithParameter("@fromGlobalSequence", fromGlobalSequence);
+
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            queryDef = queryDef.WithParameter("@tenantId", tenantId);
+        }
+
+        var requestOptions = new QueryRequestOptions { MaxItemCount = batchSize };
+
+        var events = new List<IEvent>();
+        using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef, requestOptions: requestOptions);
+        if (iterator == null) return events;
+
+        try
+        {
+            while (iterator.HasMoreResults && events.Count < batchSize)
+            {
+                var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+                foreach (var item in response)
+                {
+                    IEvent? @event = item.Data as IEvent;
+                    if (@event == null && item.Data != null)
+                    {
+                        var rawJson = item.Data.ToString();
+                        if (!string.IsNullOrEmpty(rawJson))
+                        {
+                            var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson, PrivateConstructorContractResolver.Settings);
+                            if (envelope != null)
+                            {
+                                _eventTypeResolver.EnsureTypedPayload(envelope);
+                            }
+                            @event = envelope;
+                        }
+                    }
+
+                    if (@event != null)
+                    {
+                        if (long.TryParse(item.Version, out var itemVer) && itemVer > 0 && @event.Version == 0)
+                        {
+                            @event.SetVersion(itemVer);
+                        }
+
+                        if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId) && @event.GlobalSequence > fromGlobalSequence)
+                        {
+                            events.Add(@event);
+                            if (events.Count >= batchSize) break;
+                        }
+                    }
+                }
+            }
+
+            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.InternalServerError || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            _logger?.LogWarning(ex, "Server-side sorted FetchGlobalEventsAsync query failed ({StatusCode}). Falling back to unsorted server-side query with client sort.", ex.StatusCode);
+            return await FetchGlobalEventsUnsortedFallbackAsync(fromGlobalSequence, batchSize, tenantId, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IReadOnlyList<IEvent>> FetchGlobalEventsUnsortedFallbackAsync(long fromGlobalSequence, int batchSize, string? tenantId, CancellationToken ct)
+    {
+        var sql = "SELECT * FROM c WHERE c._docType = '$event' AND c.data.GlobalSequence > @fromGlobalSequence";
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            sql += " AND c._tenantId = @tenantId";
+        }
+
+        var queryDef = new QueryDefinition(sql)
+            .WithParameter("@fromGlobalSequence", fromGlobalSequence);
+
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            queryDef = queryDef.WithParameter("@tenantId", tenantId);
+        }
+
+        var requestOptions = new QueryRequestOptions { MaxItemCount = batchSize };
+        var events = new List<IEvent>();
+
+        using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef, requestOptions: requestOptions);
+        if (iterator == null) return events;
+
+        try
+        {
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+                foreach (var item in response)
+                {
+                    IEvent? @event = item.Data as IEvent;
+                    if (@event == null && item.Data != null)
+                    {
+                        var rawJson = item.Data.ToString();
+                        if (!string.IsNullOrEmpty(rawJson))
+                        {
+                            var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson, PrivateConstructorContractResolver.Settings);
+                            if (envelope != null)
+                            {
+                                _eventTypeResolver.EnsureTypedPayload(envelope);
+                            }
+                            @event = envelope;
+                        }
+                    }
+
+                    if (@event != null)
+                    {
+                        if (long.TryParse(item.Version, out var itemVer) && itemVer > 0 && @event.Version == 0)
+                        {
+                            @event.SetVersion(itemVer);
+                        }
+
+                        if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId) && @event.GlobalSequence > fromGlobalSequence)
+                        {
+                            events.Add(@event);
+                        }
+                    }
+                }
+            }
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.InternalServerError || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            _logger?.LogWarning(ex, "Unsorted server-side query with filter also failed ({StatusCode}). Falling back to docType-only query.", ex.StatusCode);
+            return await FetchGlobalEventsDocTypeFallbackAsync(fromGlobalSequence, batchSize, tenantId, ct).ConfigureAwait(false);
+        }
+
+        return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+    }
+
+    private async Task<IReadOnlyList<IEvent>> FetchGlobalEventsDocTypeFallbackAsync(long fromGlobalSequence, int batchSize, string? tenantId, CancellationToken ct)
+    {
+        var sql = "SELECT * FROM c WHERE c._docType = '$event'";
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            sql += " AND c._tenantId = @tenantId";
+        }
+
+        var queryDef = new QueryDefinition(sql);
         if (!string.IsNullOrEmpty(tenantId))
         {
             queryDef = queryDef.WithParameter("@tenantId", tenantId);
@@ -290,9 +466,9 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef);
         if (iterator == null) return events;
 
-        while (iterator.HasMoreResults && events.Count < batchSize)
+        while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(ct);
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
             foreach (var item in response)
             {
                 IEvent? @event = item.Data as IEvent;
@@ -320,7 +496,6 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                     if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId) && @event.GlobalSequence > fromGlobalSequence)
                     {
                         events.Add(@event);
-                        if (events.Count >= batchSize) break;
                     }
                 }
             }

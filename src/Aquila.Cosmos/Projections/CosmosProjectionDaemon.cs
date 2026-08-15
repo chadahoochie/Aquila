@@ -25,16 +25,19 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     private readonly IDocumentStore _documentStore;
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly ILogger<CosmosProjectionDaemon>? _logger;
+    private readonly ProjectionDaemonOptions _options;
     private readonly ConcurrentDictionary<string, bool> _stoppedProjections = new();
     private static readonly ConcurrentDictionary<string, Type?> _typeCache = new();
-    private static readonly ConcurrentDictionary<Type, MethodInfo> _processSingleStreamMethodCache = new();
+
+    public ProjectionDaemonOptions Options => _options;
 
     public CosmosProjectionDaemon(
         Container container,
         StoreOptions options,
         IProjectionCheckpointStore checkpointStore,
-        ILogger<CosmosProjectionDaemon>? logger = null)
-        : this(new DocumentStore(EnsureCosmosStorage(options, container)), checkpointStore, logger)
+        ILogger<CosmosProjectionDaemon>? logger = null,
+        ProjectionDaemonOptions? daemonOptions = null)
+        : this(new DocumentStore(EnsureCosmosStorage(options, container)), checkpointStore, logger, daemonOptions)
     {
     }
 
@@ -44,16 +47,18 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
         IProjectionCheckpointStore checkpointStore,
         string databaseName = "AquilaDB",
         string containerName = "Documents",
-        ILogger<CosmosProjectionDaemon>? logger = null)
-        : this(new DocumentStore(EnsureCosmosStorage(options, client, databaseName, containerName)), checkpointStore, logger)
+        ILogger<CosmosProjectionDaemon>? logger = null,
+        ProjectionDaemonOptions? daemonOptions = null)
+        : this(new DocumentStore(EnsureCosmosStorage(options, client, databaseName, containerName)), checkpointStore, logger, daemonOptions)
     {
     }
 
     public CosmosProjectionDaemon(
         StoreOptions options,
         IProjectionCheckpointStore checkpointStore,
-        ILogger<CosmosProjectionDaemon>? logger = null)
-        : this(new DocumentStore(options), checkpointStore, logger)
+        ILogger<CosmosProjectionDaemon>? logger = null,
+        ProjectionDaemonOptions? daemonOptions = null)
+        : this(new DocumentStore(options), checkpointStore, logger, daemonOptions)
     {
     }
 
@@ -61,11 +66,13 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     public CosmosProjectionDaemon(
         IDocumentStore documentStore,
         IProjectionCheckpointStore checkpointStore,
-        ILogger<CosmosProjectionDaemon>? logger = null)
+        ILogger<CosmosProjectionDaemon>? logger = null,
+        ProjectionDaemonOptions? daemonOptions = null)
     {
         _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
         _checkpointStore = checkpointStore ?? throw new ArgumentNullException(nameof(checkpointStore));
         _logger = logger;
+        _options = daemonOptions ?? new ProjectionDaemonOptions();
     }
 
     private static StoreOptions EnsureCosmosStorage(StoreOptions options, Container container)
@@ -144,20 +151,29 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
         var resultProperty = queryTask.GetType().GetProperty("Result")!;
         var envelopes = (System.Collections.IEnumerable)resultProperty.GetValue(queryTask)!;
 
+        var envelopeList = envelopes.Cast<object>().ToList();
+        if (envelopeList.Count == 0) return;
+
         var deleteMethod = typeof(IDocumentStorageProvider)
             .GetMethod(nameof(IDocumentStorageProvider.DeleteDocumentAsync))!
             .MakeGenericMethod(docType);
 
-        foreach (object envelope in envelopes)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, _options.MaxEventGroupConcurrency),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(envelopeList, parallelOptions, async (envelope, token) =>
         {
             var idProp = envelope.GetType().GetProperty("Id")!;
             var pkProp = envelope.GetType().GetProperty("PartitionKey")!;
             string id = (string)idProp.GetValue(envelope)!;
             string pk = (string)pkProp.GetValue(envelope)!;
 
-            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.DocumentStorage, new object[] { id, pk, ct })!;
+            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.DocumentStorage, new object[] { id, pk, token })!;
             await deleteTask.ConfigureAwait(false);
-        }
+        }).ConfigureAwait(false);
     }
 
     public async Task CatchUpAsync(CancellationToken ct = default)
@@ -176,36 +192,41 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     {
         if (projections.Count == 0) return false;
 
-        long minSequence = long.MaxValue;
-        var projectionCheckpoints = new Dictionary<string, long>();
-
-        foreach (var proj in projections)
+        var checkpointTasks = projections.Select(async proj =>
         {
             var seq = await _checkpointStore.GetCheckpointAsync(proj.Name, ct).ConfigureAwait(false);
-            projectionCheckpoints[proj.Name] = seq;
-            if (seq < minSequence)
-            {
-                minSequence = seq;
-            }
-        }
+            return (Projection: proj, Sequence: seq);
+        });
+
+        var checkpointResults = await Task.WhenAll(checkpointTasks).ConfigureAwait(false);
+        if (checkpointResults.Length == 0) return false;
+
+        var projectionCheckpoints = checkpointResults.ToDictionary(r => r.Projection.Name, r => r.Sequence);
+        long minSequence = checkpointResults.Min(r => r.Sequence);
 
         if (minSequence == long.MaxValue) return false;
 
         var eventStorage = _documentStore.Options.EventStorage;
-        var batch = await eventStorage.FetchGlobalEventsAsync(minSequence, batchSize: 100, tenantId: null, ct: ct).ConfigureAwait(false);
+        var batch = await eventStorage.FetchGlobalEventsAsync(minSequence, batchSize: _options.BatchSize, tenantId: null, ct: ct).ConfigureAwait(false);
         if (batch.Count == 0) return false;
 
-        foreach (var proj in projections)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, _options.MaxProjectionConcurrency),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(projections, parallelOptions, async (proj, token) =>
         {
             var lastSeq = projectionCheckpoints[proj.Name];
             var newEvents = batch.Where(e => e.GlobalSequence > lastSeq).ToList();
-            if (newEvents.Count == 0) continue;
+            if (newEvents.Count == 0) return;
 
-            await ProcessEventsForProjectionAsync(proj, newEvents, ct).ConfigureAwait(false);
+            await ProcessEventsForProjectionAsync(proj, newEvents, token).ConfigureAwait(false);
 
             long maxSeq = newEvents.Max(e => e.GlobalSequence);
-            await _checkpointStore.SaveCheckpointAsync(proj.Name, maxSeq, ct).ConfigureAwait(false);
-        }
+            await _checkpointStore.SaveCheckpointAsync(proj.Name, maxSeq, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
 
         return true;
     }
@@ -238,18 +259,24 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
 
         if (events.Count == 0) return;
 
-        foreach (var proj in activeProjections)
+        var parallelOptions = new ParallelOptions
         {
-            var lastSeq = await _checkpointStore.GetCheckpointAsync(proj.Name, ct).ConfigureAwait(false);
+            MaxDegreeOfParallelism = Math.Max(1, _options.MaxProjectionConcurrency),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(activeProjections, parallelOptions, async (proj, token) =>
+        {
+            var lastSeq = await _checkpointStore.GetCheckpointAsync(proj.Name, token).ConfigureAwait(false);
             var newEvents = events.Where(e => e.GlobalSequence > lastSeq).OrderBy(e => e.GlobalSequence).ToList();
 
-            if (newEvents.Count == 0) continue;
+            if (newEvents.Count == 0) return;
 
-            await ProcessEventsForProjectionAsync(proj, newEvents, ct).ConfigureAwait(false);
+            await ProcessEventsForProjectionAsync(proj, newEvents, token).ConfigureAwait(false);
 
             long maxSeq = newEvents.Max(e => e.GlobalSequence);
-            await _checkpointStore.SaveCheckpointAsync(proj.Name, maxSeq, ct).ConfigureAwait(false);
-        }
+            await _checkpointStore.SaveCheckpointAsync(proj.Name, maxSeq, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
     }
 
     private static bool IsEventDocument(object item)
@@ -428,54 +455,9 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
             .ToList();
     }
 
-    private async Task ProcessEventsForProjectionAsync(IProjection proj, IReadOnlyList<IEvent> events, CancellationToken ct)
+    private Task ProcessEventsForProjectionAsync(IProjection proj, IReadOnlyList<IEvent> events, CancellationToken ct)
     {
-        using var session = (DocumentSession)_documentStore.OpenSession();
-
-        if (proj is IMultiStreamProjection multiProj)
-        {
-            foreach (var evt in events)
-            {
-                await multiProj.ProcessEventAsync(session, evt, ct).ConfigureAwait(false);
-            }
-        }
-        else
-        {
-            var method = _processSingleStreamMethodCache.GetOrAdd(proj.AggregateType, t =>
-                typeof(CosmosProjectionDaemon).GetMethod(nameof(ProcessSingleStreamEventsAsync), BindingFlags.NonPublic | BindingFlags.Instance)!
-                    .MakeGenericMethod(t));
-
-            var task = (Task)method.Invoke(this, new object[] { session, proj, events, ct })!;
-            await task.ConfigureAwait(false);
-        }
-    }
-
-    private async Task ProcessSingleStreamEventsAsync<TAggregate>(
-        DocumentSession session,
-        IProjection proj,
-        IReadOnlyList<IEvent> events,
-        CancellationToken ct) where TAggregate : class
-    {
-        foreach (var evt in events)
-        {
-            var aggregateId = evt.StreamId;
-            var existingAggregate = await session.LoadAsync<TAggregate>(aggregateId, aggregateId, ct).ConfigureAwait(false)
-                                     ?? (TAggregate)Activator.CreateInstance(typeof(TAggregate))!;
-
-            proj.ApplyEvent(evt, existingAggregate);
-
-            var envelope = new DocumentEnvelope<TAggregate>
-            {
-                Id = aggregateId,
-                PartitionKey = aggregateId,
-                DocType = typeof(TAggregate).Name,
-                TenantId = session.TenantId,
-                IsDeleted = false,
-                Data = existingAggregate
-            };
-
-            await _documentStore.Options.DocumentStorage.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
-        }
+        return BoundedParallelEventDispatcher.DispatchAsync(_documentStore, proj, events, _options.MaxEventGroupConcurrency, ct);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -487,12 +469,12 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
                 var asyncProjections = GetActiveAsyncProjections();
                 if (asyncProjections.Count == 0)
                 {
-                    await Task.Delay(100, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_options.IdlePollingIntervalMs, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
                 await CatchUpAsync(stoppingToken).ConfigureAwait(false);
-                await Task.Delay(100, stoppingToken).ConfigureAwait(false);
+                await Task.Delay(_options.PollingIntervalMs, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

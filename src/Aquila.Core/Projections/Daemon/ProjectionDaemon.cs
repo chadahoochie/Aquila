@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Reflection;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
 using Aquila.Core.Events;
@@ -20,21 +19,29 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
     private readonly IDocumentStore _documentStore;
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly ILogger<ProjectionDaemon>? _logger;
+    private readonly ProjectionDaemonOptions _options;
     private readonly ConcurrentDictionary<string, bool> _stoppedProjections = new();
-    private static readonly ConcurrentDictionary<Type, MethodInfo> _processSingleStreamMethodCache = new();
 
-    public ProjectionDaemon(IDocumentStore documentStore, IProjectionCheckpointStore checkpointStore, ILogger<ProjectionDaemon>? logger = null)
+    public ProjectionDaemonOptions Options => _options;
+
+    public ProjectionDaemon(
+        IDocumentStore documentStore,
+        IProjectionCheckpointStore checkpointStore,
+        ILogger<ProjectionDaemon>? logger = null,
+        ProjectionDaemonOptions? options = null)
     {
         _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
         _checkpointStore = checkpointStore ?? throw new ArgumentNullException(nameof(checkpointStore));
         _logger = logger;
+        _options = options ?? new ProjectionDaemonOptions();
     }
 
     public ProjectionDaemon(
         StoreOptions options,
         IProjectionCheckpointStore checkpointStore,
-        ILogger<ProjectionDaemon>? logger = null)
-        : this(new DocumentStore(options), checkpointStore, logger)
+        ILogger<ProjectionDaemon>? logger = null,
+        ProjectionDaemonOptions? daemonOptions = null)
+        : this(new DocumentStore(options), checkpointStore, logger, daemonOptions)
     {
     }
 
@@ -63,7 +70,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
 
         await ClearProjectionDocumentsAsync(projection, ct).ConfigureAwait(false);
 
-        // 2. Reprocess historical events
+        // Reprocess historical events
         await CatchUpProjectionAsync(projection.Name, ct).ConfigureAwait(false);
     }
 
@@ -104,20 +111,29 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
         var resultProperty = queryTask.GetType().GetProperty("Result")!;
         var envelopes = (IEnumerable)resultProperty.GetValue(queryTask)!;
 
+        var envelopeList = envelopes.Cast<object>().ToList();
+        if (envelopeList.Count == 0) return;
+
         var deleteMethod = typeof(IDocumentStorageProvider)
             .GetMethod(nameof(IDocumentStorageProvider.DeleteDocumentAsync))!
             .MakeGenericMethod(docType);
 
-        foreach (object envelope in envelopes)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, _options.MaxEventGroupConcurrency),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(envelopeList, parallelOptions, async (envelope, token) =>
         {
             var idProp = envelope.GetType().GetProperty("Id")!;
             var pkProp = envelope.GetType().GetProperty("PartitionKey")!;
             string id = (string)idProp.GetValue(envelope)!;
             string pk = (string)pkProp.GetValue(envelope)!;
 
-            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.DocumentStorage, new object[] { id, pk, ct })!;
+            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.DocumentStorage, new object[] { id, pk, token })!;
             await deleteTask.ConfigureAwait(false);
-        }
+        }).ConfigureAwait(false);
     }
 
     public async Task CatchUpAsync(CancellationToken ct = default)
@@ -141,14 +157,14 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
                 var asyncProjections = GetActiveAsyncProjections();
                 if (asyncProjections.Count == 0)
                 {
-                    await Task.Delay(100, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_options.IdlePollingIntervalMs, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
                 bool processedAny = await ProcessNextBatchAsync(asyncProjections, stoppingToken).ConfigureAwait(false);
                 if (!processedAny)
                 {
-                    await Task.Delay(100, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_options.PollingIntervalMs, stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -175,36 +191,41 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
     {
         if (projections.Count == 0) return false;
 
-        long minSequence = long.MaxValue;
-        var projectionCheckpoints = new Dictionary<string, long>();
-
-        foreach (var proj in projections)
+        var checkpointTasks = projections.Select(async proj =>
         {
             var seq = await _checkpointStore.GetCheckpointAsync(proj.Name, ct).ConfigureAwait(false);
-            projectionCheckpoints[proj.Name] = seq;
-            if (seq < minSequence)
-            {
-                minSequence = seq;
-            }
-        }
+            return (Projection: proj, Sequence: seq);
+        });
+
+        var checkpointResults = await Task.WhenAll(checkpointTasks).ConfigureAwait(false);
+        if (checkpointResults.Length == 0) return false;
+
+        var projectionCheckpoints = checkpointResults.ToDictionary(r => r.Projection.Name, r => r.Sequence);
+        long minSequence = checkpointResults.Min(r => r.Sequence);
 
         if (minSequence == long.MaxValue) return false;
 
         var eventStorage = _documentStore.Options.EventStorage;
-        var batch = await eventStorage.FetchGlobalEventsAsync(minSequence, batchSize: 100, tenantId: null, ct: ct).ConfigureAwait(false);
+        var batch = await eventStorage.FetchGlobalEventsAsync(minSequence, batchSize: _options.BatchSize, tenantId: null, ct: ct).ConfigureAwait(false);
         if (batch.Count == 0) return false;
 
-        foreach (var proj in projections)
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, _options.MaxProjectionConcurrency),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(projections, parallelOptions, async (proj, token) =>
         {
             var lastSeq = projectionCheckpoints[proj.Name];
             var newEvents = batch.Where(e => e.GlobalSequence > lastSeq).ToList();
-            if (newEvents.Count == 0) continue;
+            if (newEvents.Count == 0) return;
 
-            await ProcessEventsForProjectionAsync(proj, newEvents, ct).ConfigureAwait(false);
+            await ProcessEventsForProjectionAsync(proj, newEvents, token).ConfigureAwait(false);
 
             long maxSeq = newEvents.Max(e => e.GlobalSequence);
-            await _checkpointStore.SaveCheckpointAsync(proj.Name, maxSeq, ct).ConfigureAwait(false);
-        }
+            await _checkpointStore.SaveCheckpointAsync(proj.Name, maxSeq, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
 
         return true;
     }
@@ -221,7 +242,7 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
         {
             var lastSeq = await _checkpointStore.GetCheckpointAsync(proj.Name, ct).ConfigureAwait(false);
             var eventStorage = _documentStore.Options.EventStorage;
-            var batch = await eventStorage.FetchGlobalEventsAsync(lastSeq, batchSize: 100, tenantId: null, ct: ct).ConfigureAwait(false);
+            var batch = await eventStorage.FetchGlobalEventsAsync(lastSeq, batchSize: _options.BatchSize, tenantId: null, ct: ct).ConfigureAwait(false);
 
             if (batch.Count == 0)
             {
@@ -236,53 +257,8 @@ public class ProjectionDaemon : BackgroundService, IProjectionDaemon
         }
     }
 
-    private async Task ProcessEventsForProjectionAsync(IProjection proj, IReadOnlyList<IEvent> events, CancellationToken ct)
+    private Task ProcessEventsForProjectionAsync(IProjection proj, IReadOnlyList<IEvent> events, CancellationToken ct)
     {
-        using var session = (DocumentSession)_documentStore.OpenSession();
-
-        if (proj is IMultiStreamProjection multiProj)
-        {
-            foreach (var evt in events)
-            {
-                await multiProj.ProcessEventAsync(session, evt, ct).ConfigureAwait(false);
-            }
-        }
-        else
-        {
-            var method = _processSingleStreamMethodCache.GetOrAdd(proj.AggregateType, t =>
-                typeof(ProjectionDaemon).GetMethod(nameof(ProcessSingleStreamEventsAsync), BindingFlags.NonPublic | BindingFlags.Instance)!
-                    .MakeGenericMethod(t));
-
-            var task = (Task)method.Invoke(this, new object[] { session, proj, events, ct })!;
-            await task.ConfigureAwait(false);
-        }
-    }
-
-    private async Task ProcessSingleStreamEventsAsync<TAggregate>(
-        DocumentSession session,
-        IProjection proj,
-        IReadOnlyList<IEvent> events,
-        CancellationToken ct) where TAggregate : class
-    {
-        foreach (var evt in events)
-        {
-            var aggregateId = evt.StreamId;
-            var existingAggregate = await session.LoadAsync<TAggregate>(aggregateId, aggregateId, ct).ConfigureAwait(false)
-                                     ?? (TAggregate)Activator.CreateInstance(typeof(TAggregate))!;
-
-            proj.ApplyEvent(evt, existingAggregate);
-
-            var envelope = new DocumentEnvelope<TAggregate>
-            {
-                Id = aggregateId,
-                PartitionKey = aggregateId,
-                DocType = typeof(TAggregate).Name,
-                TenantId = session.TenantId,
-                IsDeleted = false,
-                Data = existingAggregate
-            };
-
-            await _documentStore.Options.DocumentStorage.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
-        }
+        return BoundedParallelEventDispatcher.DispatchAsync(_documentStore, proj, events, _options.MaxEventGroupConcurrency, ct);
     }
 }
