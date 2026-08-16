@@ -4,6 +4,7 @@ using System.Reflection;
 using Newtonsoft.Json;
 using Aquila.Core.Events;
 using Aquila.Core.Exceptions;
+using Aquila.Core.Queries;
 using Aquila.Core.Serialization;
 
 namespace Aquila.Core.Storage;
@@ -64,7 +65,7 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
             query = query.Where(compiled);
         }
 
-        var allItems = query.OrderBy(env => env.Id, StringComparer.Ordinal).ToList();
+        var allItems = ApplyOrdering(query, options?.Orderings).ToList();
         int totalCount = allItems.Count;
 
         // Offset-based pagination
@@ -103,6 +104,119 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
         }
 
         return Task.FromResult(new StorageQueryResult<T>(items, nextContinuationToken, totalCount));
+    }
+
+    private static IEnumerable<DocumentEnvelope<T>> ApplyOrdering<T>(
+        IEnumerable<DocumentEnvelope<T>> query,
+        IReadOnlyList<SortDescriptor>? orderings)
+    {
+        if (orderings == null || orderings.Count == 0)
+        {
+            return query.OrderBy(env => env.Id, StringComparer.Ordinal);
+        }
+
+        IOrderedEnumerable<DocumentEnvelope<T>>? ordered = null;
+
+        for (int i = 0; i < orderings.Count; i++)
+        {
+            var descriptor = orderings[i];
+            if (descriptor?.KeySelector == null) continue;
+
+            var compiled = CompileKeySelector<T>(descriptor.KeySelector);
+
+            if (ordered == null)
+            {
+                ordered = descriptor.Direction == SortOrder.Ascending
+                    ? query.OrderBy(compiled, NullSafeComparer.Instance)
+                    : query.OrderByDescending(compiled, NullSafeComparer.Instance);
+            }
+            else
+            {
+                ordered = descriptor.Direction == SortOrder.Ascending
+                    ? ordered.ThenBy(compiled, NullSafeComparer.Instance)
+                    : ordered.ThenByDescending(compiled, NullSafeComparer.Instance);
+            }
+        }
+
+        return ordered ?? query.OrderBy(env => env.Id, StringComparer.Ordinal);
+    }
+
+    private static Func<DocumentEnvelope<T>, object?> CompileKeySelector<T>(LambdaExpression expression)
+    {
+        if (expression is Expression<Func<DocumentEnvelope<T>, object?>> typedExpr)
+        {
+            return typedExpr.Compile();
+        }
+
+        var param = expression.Parameters[0];
+        if (param.Type == typeof(DocumentEnvelope<T>))
+        {
+            var body = expression.Body;
+            if (body.Type != typeof(object))
+            {
+                body = Expression.Convert(body, typeof(object));
+            }
+            return Expression.Lambda<Func<DocumentEnvelope<T>, object?>>(body, param).Compile();
+        }
+        else
+        {
+            var newParam = Expression.Parameter(typeof(DocumentEnvelope<T>), "env");
+            var visitor = new ParameterReplaceVisitor(param, newParam);
+            var rewrittenBody = visitor.Visit(expression.Body);
+            if (rewrittenBody.Type != typeof(object))
+            {
+                rewrittenBody = Expression.Convert(rewrittenBody, typeof(object));
+            }
+            return Expression.Lambda<Func<DocumentEnvelope<T>, object?>>(rewrittenBody, newParam).Compile();
+        }
+    }
+
+    private sealed class ParameterReplaceVisitor : ExpressionVisitor
+    {
+        private readonly ParameterExpression _from;
+        private readonly ParameterExpression _to;
+
+        public ParameterReplaceVisitor(ParameterExpression from, ParameterExpression to)
+        {
+            _from = from;
+            _to = to;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node) =>
+            node == _from ? _to : base.VisitParameter(node);
+    }
+
+    internal sealed class NullSafeComparer : IComparer<object?>
+    {
+        public static readonly NullSafeComparer Instance = new();
+
+        public int Compare(object? x, object? y)
+        {
+            if (ReferenceEquals(x, y)) return 0;
+            if (x is null) return -1;
+            if (y is null) return 1;
+
+            if (x is IComparable compX)
+            {
+                if (y is IComparable)
+                {
+                    try
+                    {
+                        if (x.GetType() == y.GetType())
+                        {
+                            return compX.CompareTo(y);
+                        }
+                        var convertedY = Convert.ChangeType(y, x.GetType());
+                        return compX.CompareTo(convertedY);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            return string.Compare(x.ToString(), y.ToString(), StringComparison.Ordinal);
+        }
     }
 
     private static string CreateContinuationToken(int index)

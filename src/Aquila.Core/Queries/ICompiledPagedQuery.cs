@@ -28,4 +28,19 @@ public interface ICompiledPagedQuery<TDoc> where TDoc : class
     /// The filter expression targeting <see cref="DocumentEnvelope{TDoc}"/>.
     /// </summary>
     Expression<Func<DocumentEnvelope<TDoc>, bool>>? Predicate();
+
+    /// <summary>
+    /// The optional single order-by expression targeting <see cref="DocumentEnvelope{TDoc}"/>.
+    /// </summary>
+    Expression<Func<DocumentEnvelope<TDoc>, object?>>? OrderBy() => null;
+
+    /// <summary>
+    /// The sort direction for <see cref="OrderBy"/> (defaults to Ascending).
+    /// </summary>
+    SortOrder SortOrder => SortOrder.Ascending;
+
+    /// <summary>
+    /// The optional collection of sort definitions for multi-column ordering targeting <see cref="DocumentEnvelope{TDoc}"/>.
+    /// </summary>
+    IEnumerable<SortOrderDefinition<TDoc>>? Orderings() => null;
 }

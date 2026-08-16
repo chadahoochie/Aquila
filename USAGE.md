@@ -673,3 +673,119 @@ var query = new ActiveCustomersPagedQuery
 
 PagedResult<Customer> results = await session.QueryPagedAsync(query);
 ```
+
+---
+
+## 17. Query Ordering & Multi-Column Sorting
+
+Aquila provides full ordering capability across all querying APIs—including `QueryAsync`, `QueryPagedAsync`, `QueryPagedByOffsetAsync`, `StreamAsync`, `StreamPagesAsync`, and compiled queries—with support for single-property sorting, multi-column composite ordering (`ThenBy`), and server-side pushdown.
+
+### 1. Single Property Ordering (`SortOrder.Ascending` / `SortOrder.Descending`)
+
+```csharp
+using Aquila.Core.Queries;
+
+using var session = store.QuerySession();
+
+// Ascending sort by Price
+var cheapFirst = await session.QueryAsync<Product>(
+    predicate: p => p.Data.Category == "Electronics",
+    orderBy: env => env.Data.Price,
+    sortOrder: SortOrder.Ascending
+);
+
+// Descending sort by CreatedAt
+var newestFirst = await session.QueryAsync<Product>(
+    predicate: null,
+    orderBy: env => env.Data.CreatedAt,
+    sortOrder: SortOrder.Descending
+);
+```
+
+### 2. Multi-Column Composite Sorting
+
+Use `SortOrderDefinition<T>` to specify multiple sort criteria:
+
+```csharp
+var orderings = new[]
+{
+    SortOrderDefinition<Product>.Ascending(p => p.Data.Category),
+    SortOrderDefinition<Product>.Descending(p => p.Data.Price)
+};
+
+var sortedProducts = await session.QueryAsync<Product>(
+    predicate: null,
+    orderings: orderings
+);
+```
+
+### 3. Paged Queries with Ordering
+
+Sort order is preserved consistently across continuation-token and offset-based pages:
+
+```csharp
+// Cursor-based paging with ordering
+PagedResult<Product> page1 = await session.QueryPagedAsync<Product>(
+    predicate: null,
+    orderBy: p => p.Data.Price,
+    sortOrder: SortOrder.Ascending,
+    pageSize: 20
+);
+
+// Offset-based paging with multiple orderings
+PagedResult<Product> page3 = await session.QueryPagedByOffsetAsync<Product>(
+    pageNumber: 3,
+    pageSize: 10,
+    predicate: null,
+    orderings: orderings
+);
+```
+
+### 4. Streaming with Ordering
+
+```csharp
+// Asynchronously stream sorted documents
+await foreach (var product in session.StreamAsync<Product>(
+    predicate: null,
+    orderBy: p => p.Data.Price,
+    sortOrder: SortOrder.Ascending,
+    batchSize: 50))
+{
+    Process(product);
+}
+```
+
+### 5. Compiled Paged Query with Ordering
+
+```csharp
+public class SortedProductsPagedQuery : ICompiledPagedQuery<Product>
+{
+    public int PageSize { get; init; } = 25;
+    public string? ContinuationToken { get; init; }
+    public string? PartitionKey { get; init; }
+
+    public Expression<Func<DocumentEnvelope<Product>, bool>>? Predicate() =>
+        env => env.Data.Category == "Electronics";
+
+    // Single order-by expression
+    public Expression<Func<DocumentEnvelope<Product>, object?>>? OrderBy() =>
+        env => env.Data.Price;
+
+    public SortOrder SortOrder => SortOrder.Ascending;
+
+    // Or multi-column orderings:
+    // public IEnumerable<SortOrderDefinition<Product>>? Orderings() => new[] { ... };
+}
+
+var results = await session.QueryPagedAsync(new SortedProductsPagedQuery());
+```
+
+### 6. Fluent `QueryOptions`
+
+```csharp
+var options = new QueryOptions()
+    .OrderBy<Product>(p => p.Data.Category, SortOrder.Ascending)
+    .ThenByDescending<Product>(p => p.Data.Price);
+
+var results = await session.QueryAsync<Product>(predicate: null, options: options);
+```

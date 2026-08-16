@@ -110,8 +110,12 @@ var customer = await session.LoadAsync<Customer>("C-100", partitionKey: "US-East
 session.Store(new Customer { Id = "C-101", Name = "Acme Corp", Region = "US-West" });
 await session.SaveChangesAsync();
 
-// Async Querying with Predicate Pushdown
-var customers = await session.QueryAsync<Customer>(c => c.Data.Region == "US-East");
+// Async Querying with Predicate Pushdown and Ordering
+var customers = await session.QueryAsync<Customer>(
+    predicate: c => c.Data.Region == "US-East",
+    orderBy: c => c.Data.Name,
+    sortOrder: SortOrder.Ascending
+);
 
 // Soft Deletion (Flags IsDeleted = true, automatically filtered out from Load & Query calls)
 await session.SoftDeleteAsync<Customer>("C-100", partitionKey: "US-East");
@@ -256,9 +260,11 @@ await session.SaveChangesAsync();
 Ensure scalable, constant-RU pagination and reactive document consumption:
 
 ```csharp
-// 1. Continuation-Token Paging (Constant RU cost across deep pages)
+// 1. Continuation-Token Paging with Ordering (Constant RU cost across deep pages)
 PagedResult<Customer> page1 = await session.QueryPagedAsync<Customer>(
     predicate: c => c.Data.Region == "US-East",
+    orderBy: c => c.Data.CreatedAt,
+    sortOrder: SortOrder.Descending,
     pageSize: 20
 );
 
@@ -266,25 +272,32 @@ if (page1.HasMore)
 {
     PagedResult<Customer> page2 = await session.QueryPagedAsync<Customer>(
         predicate: c => c.Data.Region == "US-East",
+        orderBy: c => c.Data.CreatedAt,
+        sortOrder: SortOrder.Descending,
         pageSize: 20,
         continuationToken: page1.ContinuationToken
     );
 }
 
-// 2. Offset-Based Paging (Skip/Take for random page navigation)
+// 2. Offset-Based Paging with Ordering (Skip/Take for random page navigation)
 PagedResult<Customer> page3 = await session.QueryPagedByOffsetAsync<Customer>(
     pageNumber: 3,
     pageSize: 10,
-    predicate: c => c.Data.Status == "Active"
+    predicate: c => c.Data.Status == "Active",
+    orderBy: c => c.Data.Name,
+    sortOrder: SortOrder.Ascending
 );
 
-// 3. Reactive IAsyncEnumerable Streaming (Zero unbounded memory buffering)
-await foreach (var customer in session.StreamAsync<Customer>(batchSize: 100))
+// 3. Reactive IAsyncEnumerable Streaming with Ordering (Zero unbounded memory buffering)
+await foreach (var customer in session.StreamAsync<Customer>(
+    orderBy: c => c.Data.CreatedAt,
+    sortOrder: SortOrder.Ascending,
+    batchSize: 100))
 {
     Process(customer);
 }
 
-// 4. Compiled Paged Query
+// 4. Compiled Paged Query with Ordering
 public class ActiveCustomersPagedQuery : ICompiledPagedQuery<Customer>
 {
     public int PageSize { get; init; } = 25;
@@ -292,6 +305,9 @@ public class ActiveCustomersPagedQuery : ICompiledPagedQuery<Customer>
     public string? PartitionKey { get; init; }
     public Expression<Func<DocumentEnvelope<Customer>, bool>>? Predicate() =>
         env => env.Data.Status == "Active";
+    public Expression<Func<DocumentEnvelope<Customer>, object?>>? OrderBy() =>
+        env => env.Data.Name;
+    public SortOrder SortOrder => SortOrder.Ascending;
 }
 
 PagedResult<Customer> compiledResults = await session.QueryPagedAsync(new ActiveCustomersPagedQuery());

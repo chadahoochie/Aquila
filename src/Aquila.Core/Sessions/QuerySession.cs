@@ -518,7 +518,7 @@ public abstract class QuerySessionBase : IQuerySession
         if (missingIds.Count > 0)
         {
             var idSet = missingIds.ToHashSet();
-            
+
             var envelopes = await DocumentStorage.QueryDocumentsAsync<T>(
                 x => x.TenantId == TenantId && idSet.Contains(x.Id),
                 null,
@@ -545,10 +545,47 @@ public abstract class QuerySessionBase : IQuerySession
         throw new NotSupportedException("Synchronous Query<T>() is disabled to prevent sync-over-async thread pool starvation. Use QueryAsync<T>() instead.");
     }
 
-    public async Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class
+    public Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class
+    {
+        return QueryAsync<T>(predicate, (QueryOptions?)null, ct);
+    }
+
+    public Task<IReadOnlyList<T>> QueryAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        Expression<Func<DocumentEnvelope<T>, object?>> orderBy,
+        SortOrder sortOrder = SortOrder.Ascending,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(orderBy);
+        var options = new QueryOptions();
+        options.OrderBy(orderBy, sortOrder);
+        return QueryAsync<T>(predicate, options, ct);
+    }
+
+    public Task<IReadOnlyList<T>> QueryAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        IEnumerable<SortOrderDefinition<T>> orderings,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(orderings);
+        var options = new QueryOptions();
+        foreach (var ordering in orderings)
+        {
+            if (ordering != null)
+            {
+                options.Orderings.Add(ordering.ToDescriptor());
+            }
+        }
+        return QueryAsync<T>(predicate, options, ct);
+    }
+
+    public async Task<IReadOnlyList<T>> QueryAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        QueryOptions? options,
+        CancellationToken ct = default) where T : class
     {
         var fullPredicate = CombineWithTenantId(predicate);
-        var envelopes = await DocumentStorage.QueryDocumentsAsync(fullPredicate, null, ct);
+        var envelopes = await DocumentStorage.QueryDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
         return TrackAndUnwrap(envelopes);
     }
 
@@ -622,7 +659,7 @@ public abstract class QuerySessionBase : IQuerySession
         return CompiledQueryCache.Execute(queryable, query);
     }
 
-    public async Task<PagedResult<T>> QueryPagedAsync<T>(
+    public Task<PagedResult<T>> QueryPagedAsync<T>(
         Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
         int pageSize = 20,
         string? continuationToken = null,
@@ -631,7 +668,6 @@ public abstract class QuerySessionBase : IQuerySession
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
 
-        var fullPredicate = CombineWithTenantId(predicate);
         var options = new QueryOptions
         {
             PartitionKey = partitionKey,
@@ -639,8 +675,77 @@ public abstract class QuerySessionBase : IQuerySession
             ContinuationToken = string.IsNullOrWhiteSpace(continuationToken) ? null : continuationToken
         };
 
+        return QueryPagedAsync<T>(predicate, options, ct);
+    }
+
+    public Task<PagedResult<T>> QueryPagedAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        Expression<Func<DocumentEnvelope<T>, object?>> orderBy,
+        SortOrder sortOrder = SortOrder.Ascending,
+        int pageSize = 20,
+        string? continuationToken = null,
+        string? partitionKey = null,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(orderBy);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        var options = new QueryOptions
+        {
+            PartitionKey = partitionKey,
+            MaxItemCount = pageSize,
+            ContinuationToken = string.IsNullOrWhiteSpace(continuationToken) ? null : continuationToken
+        };
+        options.OrderBy(orderBy, sortOrder);
+
+        return QueryPagedAsync<T>(predicate, options, ct);
+    }
+
+    public Task<PagedResult<T>> QueryPagedAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        IEnumerable<SortOrderDefinition<T>> orderings,
+        int pageSize = 20,
+        string? continuationToken = null,
+        string? partitionKey = null,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(orderings);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        var options = new QueryOptions
+        {
+            PartitionKey = partitionKey,
+            MaxItemCount = pageSize,
+            ContinuationToken = string.IsNullOrWhiteSpace(continuationToken) ? null : continuationToken
+        };
+        foreach (var ordering in orderings)
+        {
+            if (ordering != null)
+            {
+                options.Orderings.Add(ordering.ToDescriptor());
+            }
+        }
+
+        return QueryPagedAsync<T>(predicate, options, ct);
+    }
+
+    public async Task<PagedResult<T>> QueryPagedAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        QueryOptions options,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var fullPredicate = CombineWithTenantId(predicate);
         var result = await DocumentStorage.QueryPagedDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
         var unwrappedItems = TrackAndUnwrap(result.Documents);
+
+        int pageSize = options.MaxItemCount ?? unwrappedItems.Count;
+        if (options.Skip.HasValue)
+        {
+            int pageNumber = pageSize > 0 ? (options.Skip.Value / pageSize) + 1 : 1;
+            return new PagedResult<T>(unwrappedItems, pageNumber, pageSize, result.TotalCount);
+        }
 
         return new PagedResult<T>(unwrappedItems, result.ContinuationToken, pageSize)
         {
@@ -648,7 +753,7 @@ public abstract class QuerySessionBase : IQuerySession
         };
     }
 
-    public async Task<PagedResult<T>> QueryPagedByOffsetAsync<T>(
+    public Task<PagedResult<T>> QueryPagedByOffsetAsync<T>(
         int pageNumber,
         int pageSize,
         Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
@@ -658,9 +763,7 @@ public abstract class QuerySessionBase : IQuerySession
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageNumber);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
 
-        var fullPredicate = CombineWithTenantId(predicate);
         int skip = (pageNumber - 1) * pageSize;
-
         var options = new QueryOptions
         {
             PartitionKey = partitionKey,
@@ -668,10 +771,62 @@ public abstract class QuerySessionBase : IQuerySession
             Skip = skip
         };
 
-        var result = await DocumentStorage.QueryPagedDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
-        var unwrappedItems = TrackAndUnwrap(result.Documents);
+        return QueryPagedAsync<T>(predicate, options, ct);
+    }
 
-        return new PagedResult<T>(unwrappedItems, pageNumber, pageSize, result.TotalCount);
+    public Task<PagedResult<T>> QueryPagedByOffsetAsync<T>(
+        int pageNumber,
+        int pageSize,
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        Expression<Func<DocumentEnvelope<T>, object?>> orderBy,
+        SortOrder sortOrder = SortOrder.Ascending,
+        string? partitionKey = null,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageNumber);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+        ArgumentNullException.ThrowIfNull(orderBy);
+
+        int skip = (pageNumber - 1) * pageSize;
+        var options = new QueryOptions
+        {
+            PartitionKey = partitionKey,
+            MaxItemCount = pageSize,
+            Skip = skip
+        };
+        options.OrderBy(orderBy, sortOrder);
+
+        return QueryPagedAsync<T>(predicate, options, ct);
+    }
+
+    public Task<PagedResult<T>> QueryPagedByOffsetAsync<T>(
+        int pageNumber,
+        int pageSize,
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        IEnumerable<SortOrderDefinition<T>> orderings,
+        string? partitionKey = null,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageNumber);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+        ArgumentNullException.ThrowIfNull(orderings);
+
+        int skip = (pageNumber - 1) * pageSize;
+        var options = new QueryOptions
+        {
+            PartitionKey = partitionKey,
+            MaxItemCount = pageSize,
+            Skip = skip
+        };
+        foreach (var ordering in orderings)
+        {
+            if (ordering != null)
+            {
+                options.Orderings.Add(ordering.ToDescriptor());
+            }
+        }
+
+        return QueryPagedAsync<T>(predicate, options, ct);
     }
 
     public async Task<PagedResult<TDoc>> QueryPagedAsync<TDoc>(
@@ -682,7 +837,24 @@ public abstract class QuerySessionBase : IQuerySession
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(query.PageSize);
 
         var predicate = CompiledQueryCache.ExtractPredicate(query);
-        return await QueryPagedAsync(predicate, query.PageSize, query.ContinuationToken, query.PartitionKey, ct).ConfigureAwait(false);
+        var orderings = CompiledQueryCache.ExtractOrderings(query);
+
+        var options = new QueryOptions
+        {
+            PartitionKey = query.PartitionKey,
+            MaxItemCount = query.PageSize,
+            ContinuationToken = string.IsNullOrWhiteSpace(query.ContinuationToken) ? null : query.ContinuationToken
+        };
+
+        if (orderings != null)
+        {
+            foreach (var ord in orderings)
+            {
+                options.Orderings.Add(ord);
+            }
+        }
+
+        return await QueryPagedAsync(predicate, options, ct).ConfigureAwait(false);
     }
 
     public async IAsyncEnumerable<PagedResult<T>> StreamPagesAsync<T>(
@@ -706,6 +878,53 @@ public abstract class QuerySessionBase : IQuerySession
         }
     }
 
+    public async IAsyncEnumerable<PagedResult<T>> StreamPagesAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        Expression<Func<DocumentEnvelope<T>, object?>> orderBy,
+        SortOrder sortOrder = SortOrder.Ascending,
+        string? partitionKey = null,
+        int pageSize = 100,
+        string? initialContinuationToken = null,
+        [EnumeratorCancellation] CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(orderBy);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        string? currentToken = string.IsNullOrWhiteSpace(initialContinuationToken) ? null : initialContinuationToken;
+        bool isFirstPage = true;
+
+        while ((isFirstPage || !string.IsNullOrWhiteSpace(currentToken)) && !ct.IsCancellationRequested)
+        {
+            isFirstPage = false;
+            var page = await QueryPagedAsync<T>(predicate, orderBy, sortOrder, pageSize, currentToken, partitionKey, ct).ConfigureAwait(false);
+            yield return page;
+            currentToken = page.ContinuationToken;
+        }
+    }
+
+    public async IAsyncEnumerable<PagedResult<T>> StreamPagesAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        IEnumerable<SortOrderDefinition<T>> orderings,
+        string? partitionKey = null,
+        int pageSize = 100,
+        string? initialContinuationToken = null,
+        [EnumeratorCancellation] CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(orderings);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        string? currentToken = string.IsNullOrWhiteSpace(initialContinuationToken) ? null : initialContinuationToken;
+        bool isFirstPage = true;
+
+        while ((isFirstPage || !string.IsNullOrWhiteSpace(currentToken)) && !ct.IsCancellationRequested)
+        {
+            isFirstPage = false;
+            var page = await QueryPagedAsync<T>(predicate, orderings, pageSize, currentToken, partitionKey, ct).ConfigureAwait(false);
+            yield return page;
+            currentToken = page.ContinuationToken;
+        }
+    }
+
     public async IAsyncEnumerable<T> StreamAsync<T>(
         Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
         string? partitionKey = null,
@@ -713,6 +932,41 @@ public abstract class QuerySessionBase : IQuerySession
         [EnumeratorCancellation] CancellationToken ct = default) where T : class
     {
         await foreach (var page in StreamPagesAsync<T>(predicate, partitionKey, batchSize, null, ct).ConfigureAwait(false))
+        {
+            foreach (var item in page.Items)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return item;
+            }
+        }
+    }
+
+    public async IAsyncEnumerable<T> StreamAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        Expression<Func<DocumentEnvelope<T>, object?>> orderBy,
+        SortOrder sortOrder = SortOrder.Ascending,
+        string? partitionKey = null,
+        int batchSize = 100,
+        [EnumeratorCancellation] CancellationToken ct = default) where T : class
+    {
+        await foreach (var page in StreamPagesAsync<T>(predicate, orderBy, sortOrder, partitionKey, batchSize, null, ct).ConfigureAwait(false))
+        {
+            foreach (var item in page.Items)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return item;
+            }
+        }
+    }
+
+    public async IAsyncEnumerable<T> StreamAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate,
+        IEnumerable<SortOrderDefinition<T>> orderings,
+        string? partitionKey = null,
+        int batchSize = 100,
+        [EnumeratorCancellation] CancellationToken ct = default) where T : class
+    {
+        await foreach (var page in StreamPagesAsync<T>(predicate, orderings, partitionKey, batchSize, null, ct).ConfigureAwait(false))
         {
             foreach (var item in page.Items)
             {

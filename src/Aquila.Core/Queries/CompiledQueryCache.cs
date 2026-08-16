@@ -44,6 +44,25 @@ public static class CompiledQueryCache
         return query.Predicate();
     }
 
+    public static IEnumerable<SortDescriptor>? ExtractOrderings<TDoc>(ICompiledPagedQuery<TDoc> query) where TDoc : class
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var orderings = query.Orderings();
+        if (orderings != null)
+        {
+            return orderings.Where(o => o != null).Select(o => o.ToDescriptor());
+        }
+
+        var singleOrderBy = query.OrderBy();
+        if (singleOrderBy != null)
+        {
+            return new[] { new SortDescriptor(singleOrderBy, query.SortOrder) };
+        }
+
+        return null;
+    }
+
     public static void Clear()
     {
         _cache.Clear();

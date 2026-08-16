@@ -116,20 +116,13 @@ public sealed class DocumentMapping<T> : IDocumentMappingInfo where T : class
 
 public sealed class SchemaPolicy
 {
-    private readonly Dictionary<Type, object> _mappings = new();
+    private readonly ConcurrentDictionary<Type, object> _mappings = new();
 
     public IReadOnlyDictionary<Type, object> Mappings => _mappings;
 
     public DocumentMapping<T> For<T>() where T : class
     {
-        if (!_mappings.TryGetValue(typeof(T), out var mapping))
-        {
-            var newMapping = new DocumentMapping<T>();
-            _mappings[typeof(T)] = newMapping;
-            return newMapping;
-        }
-
-        return (DocumentMapping<T>)mapping;
+        return (DocumentMapping<T>)_mappings.GetOrAdd(typeof(T), _ => new DocumentMapping<T>());
     }
 }
 

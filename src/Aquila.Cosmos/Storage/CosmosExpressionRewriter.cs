@@ -36,6 +36,24 @@ public class CosmosExpressionRewriter : ExpressionVisitor
         return Expression.Lambda<Func<CosmosDocumentEnvelope<T>, bool>>(newBody, newParam);
     }
 
+    public static LambdaExpression? Rewrite<T>(LambdaExpression? lambda) where T : class
+    {
+        if (lambda == null) return null;
+
+        if (lambda.Parameters.Count == 0)
+        {
+            throw new ArgumentException("Expression must have at least one parameter.", nameof(lambda));
+        }
+
+        var oldParam = lambda.Parameters[0];
+        var newParam = Expression.Parameter(typeof(CosmosDocumentEnvelope<T>), oldParam.Name);
+
+        var rewriter = new CosmosExpressionRewriter(oldParam, newParam);
+        var newBody = rewriter.Visit(lambda.Body);
+
+        return Expression.Lambda(newBody, newParam);
+    }
+
     protected override Expression VisitParameter(ParameterExpression node)
     {
         if (node == _oldParam)

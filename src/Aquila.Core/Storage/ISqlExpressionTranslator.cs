@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Aquila.Core.Queries;
 
 namespace Aquila.Core.Storage;
 
@@ -8,6 +9,8 @@ namespace Aquila.Core.Storage;
 public interface ISqlExpressionTranslator
 {
     TranslationResult Translate<T>(Expression<Func<DocumentEnvelope<T>, bool>> predicate);
+    string TranslateOrderBy<T>(Expression<Func<DocumentEnvelope<T>, object?>> orderBy, SortOrder direction = SortOrder.Ascending);
+    string TranslateOrderBy(IEnumerable<SortDescriptor> orderings);
 }
 
 /// <summary>
