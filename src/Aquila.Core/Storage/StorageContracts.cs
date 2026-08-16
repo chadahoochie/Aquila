@@ -70,6 +70,26 @@ public sealed class QueryOptions
     public string? PartitionKey { get; set; }
     public int? MaxItemCount { get; set; }
     public string? ContinuationToken { get; set; }
+    public int? Skip { get; set; }
+}
+
+/// <summary>
+/// Represents the result of a storage-level paged query execution.
+/// </summary>
+public sealed class StorageQueryResult<T>
+{
+    public IReadOnlyList<DocumentEnvelope<T>> Documents { get; init; } = Array.Empty<DocumentEnvelope<T>>();
+    public string? ContinuationToken { get; init; }
+    public int? TotalCount { get; init; }
+
+    public StorageQueryResult() { }
+
+    public StorageQueryResult(IReadOnlyList<DocumentEnvelope<T>> documents, string? continuationToken = null, int? totalCount = null)
+    {
+        Documents = documents ?? Array.Empty<DocumentEnvelope<T>>();
+        ContinuationToken = string.IsNullOrWhiteSpace(continuationToken) ? null : continuationToken;
+        TotalCount = totalCount;
+    }
 }
 
 /// <summary>
@@ -81,6 +101,7 @@ public interface IDocumentStorageProvider : IDisposable, IAsyncDisposable
     Task InitializeAsync(CancellationToken ct = default);
     Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
     Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class;
+    Task<StorageQueryResult<T>> QueryPagedDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class;
     Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class;
     Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
     Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default);

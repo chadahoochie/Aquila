@@ -409,7 +409,7 @@ public sealed class CosmosStorageProviderTests
     public async Task AppendEventsAsync_EarlyReturn_On_EmptyEvents_And_NegativeExpectedVersion()
     {
         await _provider.AppendEventsAsync("s-empty", Array.Empty<IEvent>(), expectedVersion: 0, ct: TestContext.Current.CancellationToken);
-        await _mockContainer.DidNotReceiveWithAnyArgs().UpsertItemAsync<object>(default!, default, cancellationToken: default);
+        await _mockContainer.DidNotReceiveWithAnyArgs().UpsertItemAsync<object>(default!, default, cancellationToken: TestContext.Current.CancellationToken);
 
         var evt = new EventEnvelope<object> { StreamId = "s-neg", Version = 0, TenantId = "t1", Data = new MockDoc("1", "N") };
         await _provider.AppendEventsAsync("s-neg", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
@@ -480,6 +480,40 @@ public sealed class CosmosStorageProviderTests
 
         results.Count.ShouldBe(1);
         results[0].Id.ShouldBe("doc-fb");
+    }
+
+    [Fact]
+    public async Task QueryPagedDocumentsAsync_Returns_EmptyArray_When_Queryable_Is_Null()
+    {
+        _mockContainer.GetItemLinqQueryable<CosmosDocumentEnvelope<MockDoc>>(Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>(), Arg.Any<CosmosLinqSerializerOptions>())
+            .Returns((IOrderedQueryable<CosmosDocumentEnvelope<MockDoc>>)null!);
+
+        var results = await _provider.QueryPagedDocumentsAsync<MockDoc>(x => x.Id == "1", ct: TestContext.Current.CancellationToken);
+        results.Documents.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task QueryPagedDocumentsAsync_Fallback_When_QueryIterator_Throws()
+    {
+        var envelope = new CosmosDocumentEnvelope<MockDoc>
+        {
+            Id = "doc-fb",
+            PartitionKey = "pk-fb",
+            DocType = nameof(MockDoc),
+            Data = new MockDoc("doc-fb", "Fallback Item")
+        };
+        var fakeQueryable = new List<CosmosDocumentEnvelope<MockDoc>> { envelope }.AsQueryable() as IOrderedQueryable<CosmosDocumentEnvelope<MockDoc>>;
+
+        _mockContainer.GetItemLinqQueryable<CosmosDocumentEnvelope<MockDoc>>(Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>(), Arg.Any<CosmosLinqSerializerOptions>())
+            .Returns(fakeQueryable);
+
+        _mockContainer.GetItemQueryIterator<CosmosDocumentEnvelope<MockDoc>>(Arg.Any<QueryDefinition>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>())
+            .Returns(_ => throw new InvalidOperationException("LINQ to Cosmos definition failed"));
+
+        var results = await _provider.QueryPagedDocumentsAsync<MockDoc>(options: null, ct: TestContext.Current.CancellationToken);
+
+        results.Documents.Count.ShouldBe(1);
+        results.Documents[0].Id.ShouldBe("doc-fb");
     }
 
     [Fact]

@@ -19,7 +19,7 @@ Aquila/
 │   │   ├── Patching/                   # IPatchExpression<T>, PatchExpression<T>
 │   │   ├── Projections/                # IProjection, SingleStreamProjection<T>, MultiStreamProjection<TDoc,TId>
 │   │   │   └── Daemon/                 # IProjectionDaemon, ProjectionDaemon, IProjectionCheckpointStore
-│   │   ├── Queries/                    # ICompiledQuery<TDoc,TResult>, CompiledQueryCache
+│   │   ├── Queries/                    # ICompiledQuery<TDoc,TResult>, ICompiledPagedQuery<TDoc>, CompiledQueryCache, PagedResult<T>
 │   │   ├── Sessions/                   # DocumentSession, QuerySession, IIdentityMap, TrackingMode, DocumentStore
 │   │   └── Storage/                    # StorageContracts (SPI), InMemoryStorageProvider, ISqlExpressionTranslator
 │   └── Aquila.Cosmos/                   # Azure Cosmos DB SPI storage providers & Cosmos event store
@@ -39,8 +39,8 @@ Aquila/
 
 | Project | Target Framework | Core Responsibilities |
 | :--- | :--- | :--- |
-| [`Aquila.Core`](src/Aquila.Core) | `net10.0` | Core abstractions (`IDocumentStore`, `IDocumentSession`, `IQuerySession`, `IEventStore`), session life-cycle management (`TrackingMode`, `IIdentityMap`), Schema/Mapping policies, the Projection engine (`SingleStreamProjection<T>`, `MultiStreamProjection<TDoc,TId>`) and its async `ProjectionDaemon`, the partial-document `Patching` API, `ICompiledQuery` caching, event upcasting/snapshotting, Storage Provider SPI contracts ([`IDocumentStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L78), [`IEventStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L92)), and the built-in [`InMemoryStorageProvider`](src/Aquila.Core/Storage/InMemoryStorageProvider.cs). |
-| [`Aquila.Cosmos`](src/Aquila.Cosmos) | `net10.0` | Azure Cosmos DB implementations of [`IDocumentStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L78) (`CosmosDocumentStorageProvider`) and [`IEventStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L92) (`CosmosEventStorageProvider`), unified composite provider (`CosmosStorageProvider`), custom Cosmos document envelopes (`CosmosDocumentEnvelope<T>`), hierarchical partition key resolution via `CosmosPartitionKeyHelper`, strongly-typed payload resolution via `CosmosEventTypeResolver`, predicate rewriting via `CosmosExpressionRewriter` onto the native Cosmos LINQ provider, the Change Feed-aware `CosmosProjectionDaemon`, and ASP.NET Core DI extensions (`AddAquila`, `UseCosmos`, `AddCosmosDaemon`). |
+| [`Aquila.Core`](src/Aquila.Core) | `net10.0` | Core abstractions (`IDocumentStore`, `IDocumentSession`, `IQuerySession`, `IEventStore`), session life-cycle management (`TrackingMode`, `IIdentityMap`), Schema/Mapping policies, the Projection engine (`SingleStreamProjection<T>`, `MultiStreamProjection<TDoc,TId>`) and its async `ProjectionDaemon`, the partial-document `Patching` API, `PagedResult<T>`, `ICompiledPagedQuery<TDoc>`, `ICompiledQuery` caching, `IAsyncEnumerable` streaming, event upcasting/snapshotting, Storage Provider SPI contracts ([`IDocumentStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L78), [`IEventStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L92)), and the built-in [`InMemoryStorageProvider`](src/Aquila.Core/Storage/InMemoryStorageProvider.cs). |
+| [`Aquila.Cosmos`](src/Aquila.Cosmos) | `net10.0` | Azure Cosmos DB implementations of [`IDocumentStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L78) (`CosmosDocumentStorageProvider`) and [`IEventStorageProvider`](src/Aquila.Core/Storage/StorageContracts.cs#L92) (`CosmosEventStorageProvider`), unified composite provider (`CosmosStorageProvider`), custom Cosmos document envelopes (`CosmosDocumentEnvelope<T>`), hierarchical partition key resolution via `CosmosPartitionKeyHelper`, strongly-typed payload resolution via `CosmosEventTypeResolver`, predicate rewriting via `CosmosExpressionRewriter` onto the native Cosmos LINQ provider, single-page and offset query execution via `QueryPagedDocumentsAsync`, the Change Feed-aware `CosmosProjectionDaemon`, and ASP.NET Core DI extensions (`AddAquila`, `UseCosmos`, `AddCosmosDaemon`). |
 | [`Aquila.Samples`](samples/Aquila.Samples) | `net10.0` | Runnable demonstration program illustrating document store configuration, event stream appending, aggregate rehydration, and inline projection handling. |
 | [`Aquila.Tests`](tests/Aquila.Tests) | `net10.0` | Automated test suite verifying session contracts, storage providers, optimistic concurrency exceptions, projection lifecycles, and security boundary isolation. |
 
@@ -55,7 +55,8 @@ classDiagram
     class IDocumentStorageProvider {
         +string ProviderName
         +ReadDocumentAsync~T~(id, partitionKey) Task~DocumentEnvelope~T~~
-        +QueryDocumentsAsync~T~(predicate) Task~IReadOnlyList~DocumentEnvelope~T~~~
+        +QueryDocumentsAsync~T~(predicate, options) Task~IReadOnlyList~DocumentEnvelope~T~~~
+        +QueryPagedDocumentsAsync~T~(predicate, options) Task~StorageQueryResult~T~~
         +UpsertDocumentAsync~T~(envelope) Task
         +DeleteDocumentAsync~T~(id, partitionKey) Task
         +ExecuteBatchAsync(operations) Task
@@ -72,6 +73,7 @@ classDiagram
         +string ProviderName
         +ReadDocumentAsync~T~(...) Task
         +QueryDocumentsAsync~T~(...) Task
+        +QueryPagedDocumentsAsync~T~(...) Task
         +UpsertDocumentAsync~T~(...) Task
         +DeleteDocumentAsync~T~(...) Task
         +ExecuteBatchAsync(...) Task
@@ -301,6 +303,44 @@ sequenceDiagram
 ```
 
 On Cosmos DB, [`CosmosProjectionDaemon`](src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs) additionally supports `ProcessChangeFeedBatchAsync`, consuming Cosmos DB Change Feed items directly instead of re-polling `FetchGlobalEventsAsync`, reducing end-to-end projection lag.
+
+---
+
+### Paging, Streaming & Compiled Paged Queries Flow
+
+Pagination in Aquila prioritizes constant-RU cursor paging via continuation tokens while also supporting asynchronous `IAsyncEnumerable<T>` streaming, LINQ offset paging, and compiled paged queries.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application Code / API
+    participant Session as IQuerySession / IDocumentSession
+    participant Cache as CompiledQueryCache
+    participant Storage as IDocumentStorageProvider
+    participant DB as Cosmos DB / InMemory Storage
+
+    alt Continuation Token Paging (QueryPagedAsync)
+        App->>Session: QueryPagedAsync(predicate, pageSize, continuationToken, partitionKey)
+        Session->>Session: Combine predicate with TenantId
+        Session->>Storage: QueryPagedDocumentsAsync(fullPredicate, QueryOptions)
+        Storage->>DB: Read single page batch via FeedIterator
+        DB-->>Storage: Page items + next ContinuationToken
+        Storage-->>Session: StorageQueryResult<T>
+        Session->>Session: TrackAndUnwrap items in IdentityMap
+        Session-->>App: PagedResult<T>(items, nextContinuationToken, pageSize)
+    else IAsyncEnumerable Streaming (StreamAsync / StreamPagesAsync)
+        App->>Session: StreamAsync<T>(predicate, partitionKey, batchSize)
+        loop While HasMore and not cancelled
+            Session->>Session: QueryPagedAsync(currentToken)
+            Session-->>App: yield return item
+        end
+    else Compiled Paged Query (QueryPagedAsync<TDoc>)
+        App->>Session: QueryPagedAsync(ICompiledPagedQuery<TDoc>)
+        Session->>Cache: ExtractPredicate(query)
+        Session->>Session: QueryPagedAsync(predicate, PageSize, ContinuationToken)
+        Session-->>App: PagedResult<TDoc>
+    end
+```
 
 ---
 

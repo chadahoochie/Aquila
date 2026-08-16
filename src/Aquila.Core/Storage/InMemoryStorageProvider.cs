@@ -35,7 +35,16 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
         return Task.FromResult<DocumentEnvelope<T>?>(null);
     }
 
-    public Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(
+    public async Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        QueryOptions? options = null,
+        CancellationToken ct = default) where T : class
+    {
+        var result = await QueryPagedDocumentsAsync(predicate, options, ct).ConfigureAwait(false);
+        return result.Documents;
+    }
+
+    public Task<StorageQueryResult<T>> QueryPagedDocumentsAsync<T>(
         Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
         QueryOptions? options = null,
         CancellationToken ct = default) where T : class
@@ -55,12 +64,72 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
             query = query.Where(compiled);
         }
 
-        if (options != null && options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0)
+        var allItems = query.OrderBy(env => env.Id, StringComparer.Ordinal).ToList();
+        int totalCount = allItems.Count;
+
+        // Offset-based pagination
+        if (options != null && options.Skip.HasValue && options.Skip.Value >= 0)
         {
-            query = query.Take(options.MaxItemCount.Value);
+            int skip = options.Skip.Value;
+            int take = (options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0)
+                ? options.MaxItemCount.Value
+                : totalCount;
+
+            var pageItems = allItems.Skip(skip).Take(take).ToList();
+            return Task.FromResult(new StorageQueryResult<T>(pageItems, continuationToken: null, totalCount: totalCount));
         }
 
-        return Task.FromResult<IReadOnlyList<DocumentEnvelope<T>>>(query.ToList());
+        // Continuation-token based pagination
+        int startIndex = 0;
+        if (!string.IsNullOrWhiteSpace(options?.ContinuationToken))
+        {
+            if (TryParseContinuationToken(options.ContinuationToken, out int parsedIndex))
+            {
+                startIndex = parsedIndex;
+            }
+        }
+
+        int maxItems = (options != null && options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0)
+            ? options.MaxItemCount.Value
+            : totalCount;
+
+        var items = allItems.Skip(startIndex).Take(maxItems).ToList();
+        int nextIndex = startIndex + items.Count;
+
+        string? nextContinuationToken = null;
+        if (nextIndex < totalCount && items.Count > 0)
+        {
+            nextContinuationToken = CreateContinuationToken(nextIndex);
+        }
+
+        return Task.FromResult(new StorageQueryResult<T>(items, nextContinuationToken, totalCount));
+    }
+
+    private static string CreateContinuationToken(int index)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes($"offset:{index}");
+        return Convert.ToBase64String(bytes);
+    }
+
+    private static bool TryParseContinuationToken(string token, out int index)
+    {
+        index = 0;
+        try
+        {
+            var bytes = Convert.FromBase64String(token);
+            var text = System.Text.Encoding.UTF8.GetString(bytes);
+            if (text.StartsWith("offset:", StringComparison.Ordinal) &&
+                int.TryParse(text.AsSpan("offset:".Length), out int parsed))
+            {
+                index = parsed;
+                return true;
+            }
+        }
+        catch
+        {
+            // If token is invalid/unparseable, fallback to 0
+        }
+        return false;
     }
 
     public Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class

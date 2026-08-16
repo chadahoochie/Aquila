@@ -251,7 +251,55 @@ await session.SaveChangesAsync();
 
 ---
 
-## 8. Compiled Queries & Expression Caching
+## 8. Document Paging & Asynchronous Streaming
+
+Ensure scalable, constant-RU pagination and reactive document consumption:
+
+```csharp
+// 1. Continuation-Token Paging (Constant RU cost across deep pages)
+PagedResult<Customer> page1 = await session.QueryPagedAsync<Customer>(
+    predicate: c => c.Data.Region == "US-East",
+    pageSize: 20
+);
+
+if (page1.HasMore)
+{
+    PagedResult<Customer> page2 = await session.QueryPagedAsync<Customer>(
+        predicate: c => c.Data.Region == "US-East",
+        pageSize: 20,
+        continuationToken: page1.ContinuationToken
+    );
+}
+
+// 2. Offset-Based Paging (Skip/Take for random page navigation)
+PagedResult<Customer> page3 = await session.QueryPagedByOffsetAsync<Customer>(
+    pageNumber: 3,
+    pageSize: 10,
+    predicate: c => c.Data.Status == "Active"
+);
+
+// 3. Reactive IAsyncEnumerable Streaming (Zero unbounded memory buffering)
+await foreach (var customer in session.StreamAsync<Customer>(batchSize: 100))
+{
+    Process(customer);
+}
+
+// 4. Compiled Paged Query
+public class ActiveCustomersPagedQuery : ICompiledPagedQuery<Customer>
+{
+    public int PageSize { get; init; } = 25;
+    public string? ContinuationToken { get; init; }
+    public string? PartitionKey { get; init; }
+    public Expression<Func<DocumentEnvelope<Customer>, bool>>? Predicate() =>
+        env => env.Data.Status == "Active";
+}
+
+PagedResult<Customer> compiledResults = await session.QueryPagedAsync(new ActiveCustomersPagedQuery());
+```
+
+---
+
+## 9. Compiled Queries & Expression Caching
 
 Eliminate LINQ expression tree compilation overhead for high-frequency query shapes:
 
@@ -271,7 +319,7 @@ var results = await session.QueryAsync(new ActiveCustomersByRegion("US-East"));
 
 ---
 
-## 9. Event Upcasting (Schema Evolution)
+## 10. Event Upcasting (Schema Evolution)
 
 Evolve event payload schemas transparently without altering historical event logs in storage:
 
@@ -294,7 +342,7 @@ options.Events.RegisterUpcaster<UserRegisteredUpcaster>();
 
 ---
 
-## 10. Multi-Tenancy, Tracing & Data Isolation Rules
+## 11. Multi-Tenancy, Tracing & Data Isolation Rules
 
 1. **Tenant Isolation**: Every `DocumentEnvelope<T>` and event stream header includes an immutable `TenantId`. Cross-tenant queries return `null` or filter out unauthorized records.
 2. **Cosmos DB SQL Injection Safety**: `CosmosStorageProvider` executes all event/stream queries using parameterized `QueryDefinition` instances (`@streamId`, `@fromVersion`, `@tenantId`).
@@ -303,7 +351,7 @@ options.Events.RegisterUpcaster<UserRegisteredUpcaster>();
 
 ---
 
-## 11. Code Quality & Performance Checklist
+## 12. Code Quality & Performance Checklist
 
 - [ ] Are internal/public infrastructure classes explicitly marked `sealed` for JIT devirtualization?
 - [ ] Are hot execution paths free of runtime reflection (using compiled expression delegates)?

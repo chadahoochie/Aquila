@@ -99,6 +99,69 @@ public sealed class CosmosQueryPushdownTests
                 r.MaxItemCount == 50),
             Arg.Any<CosmosLinqSerializerOptions>());
     }
+
+    [Fact]
+    public async Task CosmosStorageProvider_QueryPagedDocumentsAsync_Uses_GetItemLinqQueryable_With_QueryOptions()
+    {
+        var mockContainer = Substitute.For<Container>();
+        var mockClient = Substitute.For<CosmosClient>();
+        mockClient.GetContainer(Arg.Any<string>(), Arg.Any<string>()).Returns(mockContainer);
+
+        var provider = new CosmosStorageProvider(mockClient, "TestDb", "TestContainer");
+
+        var fakeList = new List<CosmosDocumentEnvelope<PushdownDoc>>().AsQueryable() as IOrderedQueryable<CosmosDocumentEnvelope<PushdownDoc>>;
+        mockContainer.GetItemLinqQueryable<CosmosDocumentEnvelope<PushdownDoc>>(
+            Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>(), Arg.Any<CosmosLinqSerializerOptions>())
+            .Returns(fakeList);
+
+        Expression<Func<DocumentEnvelope<PushdownDoc>, bool>> predicate = x => x.Data.Value > 20;
+        var options = new QueryOptions
+        {
+            PartitionKey = "pk-test",
+            MaxItemCount = 50,
+            ContinuationToken = "token-123"
+        };
+
+        var result = await provider.QueryPagedDocumentsAsync(predicate, options, TestContext.Current.CancellationToken);
+
+        result.ShouldNotBeNull();
+        mockContainer.Received(1).GetItemLinqQueryable<CosmosDocumentEnvelope<PushdownDoc>>(
+            false,
+            "token-123",
+            Arg.Is<QueryRequestOptions>(r =>
+                r.PartitionKey == new PartitionKey("pk-test") &&
+                r.MaxItemCount == 50),
+            Arg.Any<CosmosLinqSerializerOptions>());
+    }
+
+    [Fact]
+    public async Task CosmosStorageProvider_QueryPagedDocumentsAsync_NullsOut_Whitespace_ContinuationToken()
+    {
+        var mockContainer = Substitute.For<Container>();
+        var mockClient = Substitute.For<CosmosClient>();
+        mockClient.GetContainer(Arg.Any<string>(), Arg.Any<string>()).Returns(mockContainer);
+
+        var provider = new CosmosStorageProvider(mockClient, "TestDb", "TestContainer");
+
+        var fakeList = new List<CosmosDocumentEnvelope<PushdownDoc>>().AsQueryable() as IOrderedQueryable<CosmosDocumentEnvelope<PushdownDoc>>;
+        mockContainer.GetItemLinqQueryable<CosmosDocumentEnvelope<PushdownDoc>>(
+            Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<QueryRequestOptions>(), Arg.Any<CosmosLinqSerializerOptions>())
+            .Returns(fakeList);
+
+        var options = new QueryOptions
+        {
+            ContinuationToken = "   ",
+            MaxItemCount = 20
+        };
+
+        await provider.QueryPagedDocumentsAsync<PushdownDoc>(options: options, ct: TestContext.Current.CancellationToken);
+
+        mockContainer.Received(1).GetItemLinqQueryable<CosmosDocumentEnvelope<PushdownDoc>>(
+            false,
+            null,
+            Arg.Is<QueryRequestOptions>(r => r.MaxItemCount == 20),
+            Arg.Any<CosmosLinqSerializerOptions>());
+    }
     [Fact]
     public void CosmosExpressionRewriter_Throws_ArgumentException_When_Predicate_Has_No_Parameters()
     {
