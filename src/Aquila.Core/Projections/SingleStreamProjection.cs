@@ -1,4 +1,7 @@
+using Aquila.Core.Abstractions;
 using Aquila.Core.Events;
+using Aquila.Core.Sessions;
+using Aquila.Core.Storage;
 
 namespace Aquila.Core.Projections;
 
@@ -32,6 +35,12 @@ public interface IProjection
     Type AggregateType { get; }
     string Name => GetType().Name;
     void ApplyEvent(IEvent @event, object aggregate);
+
+    /// <summary>
+    /// Dispatches a batch of events to this projection in parallel across target identities preserving intra-stream sequence.
+    /// </summary>
+    Task DispatchBatchAsync(IDocumentStore store, IReadOnlyList<IEvent> events, int maxConcurrency, CancellationToken ct = default) =>
+        Task.CompletedTask;
 }
 
 /// <summary>
@@ -73,6 +82,51 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
         {
             handler(eventData, typedAggregate);
         }
+    }
+
+    public virtual async Task DispatchBatchAsync(IDocumentStore documentStore, IReadOnlyList<IEvent> events, int maxConcurrency, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(documentStore);
+        ArgumentNullException.ThrowIfNull(events);
+
+        var groups = events
+            .GroupBy(e => e.StreamId)
+            .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+            .ToList();
+
+        if (groups.Count == 0) return;
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, maxConcurrency),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(groups, parallelOptions, async (group, token) =>
+        {
+            using var session = (DocumentSession)documentStore.OpenSession();
+            var streamId = group.Key!;
+            var existingAggregate = await session.LoadAsync<TAggregate>(streamId, streamId, token).ConfigureAwait(false)
+                                     ?? new TAggregate();
+
+            var orderedEvents = group.OrderBy(e => e.GlobalSequence);
+            foreach (var evt in orderedEvents)
+            {
+                ApplyEvent(evt, existingAggregate);
+            }
+
+            var envelope = new DocumentEnvelope<TAggregate>
+            {
+                Id = streamId,
+                PartitionKey = streamId,
+                DocType = typeof(TAggregate).Name,
+                TenantId = session.TenantId,
+                IsDeleted = false,
+                Data = existingAggregate
+            };
+
+            await documentStore.Options.DocumentStorage.UpsertDocumentAsync(envelope, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
     }
 
     private static void CopyProperties(TAggregate source, TAggregate target)

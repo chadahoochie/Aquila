@@ -33,6 +33,15 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
     private Container GetContainer(Type type) => _typeContainerResolver != null ? _typeContainerResolver(type) : _containerProvider!();
 
     public string ProviderName => "AzureCosmosDB";
+    public double LastRequestCharge { get; private set; }
+    public double CumulativeRequestCharge { get; private set; }
+
+    private void RecordCharge(double charge)
+    {
+        LastRequestCharge = charge;
+        CumulativeRequestCharge += charge;
+    }
+
     public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
     public void Dispose() { }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -55,6 +64,8 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                 CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey),
                 cancellationToken: ct);
 
+            RecordCharge(response.RequestCharge);
+
             if (response?.Resource == null || response.Resource.IsDeleted) return null;
 
             return MapToEnvelope(response.Resource);
@@ -76,18 +87,22 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
         using var iterator = container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
             queryDef, requestOptions: new QueryRequestOptions { PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey) });
 
+        double totalCharge = 0.0;
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(ct);
+            totalCharge += response.RequestCharge;
             foreach (var item in response)
             {
                 if (item != null && !item.IsDeleted)
                 {
+                    RecordCharge(totalCharge);
                     return MapToEnvelope(item);
                 }
             }
         }
 
+        RecordCharge(totalCharge);
         return null;
     }
 
@@ -170,6 +185,7 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                 queryDef = rewrittenDef;
             }
 
+            double totalCharge = 0.0;
             using var iterator = container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
                 queryDef,
                 continuationToken: safeContinuationToken,
@@ -178,11 +194,14 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             while (iterator.HasMoreResults)
             {
                 var response = await iterator.ReadNextAsync(ct);
+                totalCharge += response.RequestCharge;
                 foreach (var item in response)
                 {
                     results.Add(MapToEnvelope(item));
                 }
             }
+
+            RecordCharge(totalCharge);
         }
         catch (Exception ex) when (ex is InvalidOperationException || ex is ArgumentOutOfRangeException || ex is ArgumentException)
         {
@@ -223,7 +242,7 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
         if (queryable == null || queryable.Provider == null)
         {
-            return new StorageQueryResult<T>(Array.Empty<DocumentEnvelope<T>>(), null, 0);
+            return new StorageQueryResult<T>(Array.Empty<DocumentEnvelope<T>>(), null, 0, 0.0);
         }
 
         queryable = queryable.Where(x => x.DocType == docType && !x.IsDeleted);
@@ -253,6 +272,7 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
         var results = new List<DocumentEnvelope<T>>();
         string? nextContinuationToken = null;
+        double totalCharge = 0.0;
 
         try
         {
@@ -278,12 +298,15 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             if (iterator.HasMoreResults)
             {
                 var response = await iterator.ReadNextAsync(ct);
+                totalCharge += response.RequestCharge;
                 foreach (var item in response)
                 {
                     results.Add(MapToEnvelope(item));
                 }
                 nextContinuationToken = response.ContinuationToken;
             }
+
+            RecordCharge(totalCharge);
         }
         catch (Exception ex) when (ex is InvalidOperationException || ex is ArgumentOutOfRangeException || ex is ArgumentException)
         {
@@ -294,12 +317,12 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                 int skip = options.Skip.Value;
                 int take = (options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0) ? options.MaxItemCount.Value : totalCount;
                 var paged = allItems.Skip(skip).Take(take).ToList();
-                return new StorageQueryResult<T>(paged, null, totalCount);
+                return new StorageQueryResult<T>(paged, null, totalCount, 0.0);
             }
-            return new StorageQueryResult<T>(allItems, null, totalCount);
+            return new StorageQueryResult<T>(allItems, null, totalCount, 0.0);
         }
 
-        return new StorageQueryResult<T>(results, nextContinuationToken);
+        return new StorageQueryResult<T>(results, nextContinuationToken, null, totalCharge);
     }
 
     public async Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class
@@ -321,7 +344,26 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
         };
 
         var container = GetContainer<T>();
-        await container.UpsertItemAsync(cosmosEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(envelope.PartitionKey), cancellationToken: ct);
+        ItemRequestOptions? requestOptions = null;
+        if (!string.IsNullOrWhiteSpace(envelope.ETag))
+        {
+            requestOptions = new ItemRequestOptions { IfMatchEtag = envelope.ETag };
+        }
+
+        try
+        {
+            var response = await container.UpsertItemAsync(
+                cosmosEnvelope,
+                CosmosPartitionKeyHelper.CreatePartitionKey(envelope.PartitionKey),
+                requestOptions,
+                cancellationToken: ct);
+
+            RecordCharge(response.RequestCharge);
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+        {
+            throw new Aquila.Core.Exceptions.AquilaConcurrencyException(envelope.Id, envelope.ETag ?? string.Empty, "modified");
+        }
     }
 
     public async Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class
@@ -339,6 +381,10 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
             if (response != null && (response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.NotFound))
             {
+                if (response.Headers?.RequestCharge > 0)
+                {
+                    RecordCharge(response.Headers.RequestCharge);
+                }
                 return;
             }
 
@@ -349,11 +395,13 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                 DocType = typeof(T).Name,
                 IsDeleted = true
             };
-            await container.UpsertItemAsync(deletedEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct).ConfigureAwait(false);
+            var upsertResp = await container.UpsertItemAsync(deletedEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct).ConfigureAwait(false);
+            RecordCharge(upsertResp.RequestCharge);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound ||
                                          ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
         {
+            RecordCharge(ex.RequestCharge);
         }
         catch (Exception)
         {
@@ -367,7 +415,8 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                     DocType = typeof(T).Name,
                     IsDeleted = true
                 };
-                await container.UpsertItemAsync(deletedEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct).ConfigureAwait(false);
+                var upsertResp = await container.UpsertItemAsync(deletedEnvelope, CosmosPartitionKeyHelper.CreatePartitionKey(partitionKey), cancellationToken: ct).ConfigureAwait(false);
+                RecordCharge(upsertResp.RequestCharge);
             }
             catch
             {
@@ -449,7 +498,13 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
                     {
                         case StorageOperationType.Upsert:
                             var itemToUpsert = PrepareItemToUpsert(op);
-                            batch.UpsertItem(itemToUpsert);
+                            string? etag = (itemToUpsert as CosmosDocumentEnvelope<object>)?.ETag;
+                            TransactionalBatchItemRequestOptions? batchOptions = null;
+                            if (!string.IsNullOrWhiteSpace(etag))
+                            {
+                                batchOptions = new TransactionalBatchItemRequestOptions { IfMatchEtag = etag };
+                            }
+                            batch.UpsertItem(itemToUpsert, batchOptions);
                             break;
 
                         case StorageOperationType.Delete:
@@ -468,9 +523,19 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
                 using var response = await batch.ExecuteAsync(ct).ConfigureAwait(false);
 
+                if (response != null)
+                {
+                    RecordCharge(response.RequestCharge);
+                }
+
                 if (response != null && response.IsSuccessStatusCode)
                 {
                     return;
+                }
+
+                if (response != null && (response.StatusCode == System.Net.HttpStatusCode.PreconditionFailed || response.StatusCode == System.Net.HttpStatusCode.Conflict))
+                {
+                    throw new Aquila.Core.Exceptions.AquilaConcurrencyException(chunk.FirstOrDefault()?.Id ?? string.Empty, "ETag", "Conflict");
                 }
 
                 if (response == null ||
@@ -519,17 +584,26 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             if (op.OperationType == StorageOperationType.Upsert)
             {
                 var itemToUpsert = PrepareItemToUpsert(op);
-                await container.UpsertItemAsync(itemToUpsert, pk, cancellationToken: ct).ConfigureAwait(false);
+                string? etag = (itemToUpsert as CosmosDocumentEnvelope<object>)?.ETag;
+                ItemRequestOptions? reqOptions = null;
+                if (!string.IsNullOrWhiteSpace(etag))
+                {
+                    reqOptions = new ItemRequestOptions { IfMatchEtag = etag };
+                }
+                var resp = await container.UpsertItemAsync(itemToUpsert, pk, reqOptions, cancellationToken: ct).ConfigureAwait(false);
+                RecordCharge(resp.RequestCharge);
             }
             else if (op.OperationType == StorageOperationType.Delete)
             {
-                await container.DeleteItemAsync<object>(op.Id, pk, cancellationToken: ct).ConfigureAwait(false);
+                var resp = await container.DeleteItemAsync<object>(op.Id, pk, cancellationToken: ct).ConfigureAwait(false);
+                RecordCharge(resp.RequestCharge);
             }
             else if (op.OperationType == StorageOperationType.Patch)
             {
                 if (op.PatchOperations == null || op.PatchOperations.Count == 0) continue;
                 var cosmosPatchOperations = op.PatchOperations.Select(BuildCosmosPatchOperation).ToList();
-                await container.PatchItemAsync<CosmosDocumentEnvelope<object>>(op.Id, pk, cosmosPatchOperations, cancellationToken: ct).ConfigureAwait(false);
+                var resp = await container.PatchItemAsync<CosmosDocumentEnvelope<object>>(op.Id, pk, cosmosPatchOperations, cancellationToken: ct).ConfigureAwait(false);
+                RecordCharge(resp.RequestCharge);
             }
         }
     }

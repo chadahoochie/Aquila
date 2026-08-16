@@ -206,4 +206,26 @@ public class DocumentMappingTests
         mapping.UseOptimisticConcurrency(false);
         mapping.OptimisticConcurrencyEnabled.ShouldBeFalse();
     }
+
+    [Fact]
+    public void UseIdentityAsPartitionKey_RoutesPartitionKeyToDocumentId()
+    {
+        var mapping = new DocumentMapping<DocWithUppercaseId>();
+        mapping.UseIdentityAsPartitionKey();
+
+        mapping.PartitionKeyPropertyName.ShouldBe("Id");
+        var doc = new DocWithUppercaseId { Id = "doc-999" };
+        mapping.PartitionKeySelector(doc).ShouldBe("doc-999");
+    }
+
+    [Fact]
+    public void SchemaPolicy_UseIdentityAsDefaultPartitionKey_AppliesToNewMappings()
+    {
+        var schema = new SchemaPolicy { UseIdentityAsDefaultPartitionKey = true };
+        var mapping = schema.For<DocWithUppercaseId>();
+
+        mapping.PartitionKeyPropertyName.ShouldBe("Id");
+        var doc = new DocWithUppercaseId { Id = "doc-123" };
+        mapping.PartitionKeySelector(doc).ShouldBe("doc-123");
+    }
 }

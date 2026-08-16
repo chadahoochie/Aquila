@@ -170,4 +170,48 @@ public sealed class InMemoryStorageProviderTests
 
         header.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task InMemoryDocumentStorageProvider_Standalone_Operates_Correctly()
+    {
+        IDocumentStorageProvider docProvider = new InMemoryDocumentStorageProvider();
+        docProvider.ProviderName.ShouldBe("InMemoryDocuments");
+
+        var envelope = new DocumentEnvelope<SampleDocument>
+        {
+            Id = "standalone-1",
+            PartitionKey = "pk-1",
+            DocType = nameof(SampleDocument),
+            TenantId = "default",
+            Data = new SampleDocument("standalone-1", "Standalone Title", 42m)
+        };
+
+        await docProvider.UpsertDocumentAsync(envelope, TestContext.Current.CancellationToken);
+        var loaded = await docProvider.ReadDocumentAsync<SampleDocument>("standalone-1", "pk-1", TestContext.Current.CancellationToken);
+        loaded.ShouldNotBeNull();
+        loaded.Data.Title.ShouldBe("Standalone Title");
+    }
+
+    [Fact]
+    public async Task InMemoryEventStorageProvider_Standalone_Operates_Correctly()
+    {
+        IEventStorageProvider evtProvider = new InMemoryEventStorageProvider();
+        evtProvider.ProviderName.ShouldBe("InMemoryEvents");
+
+        var streamId = "stream-standalone";
+        var evt = new EventEnvelope<AccountCreatedEvent>
+        {
+            StreamId = streamId,
+            Version = 1,
+            Data = new AccountCreatedEvent(Guid.NewGuid(), "Bob", 200m)
+        };
+
+        await evtProvider.AppendEventsAsync(streamId, new[] { evt }, 0, TestContext.Current.CancellationToken);
+        var stream = await evtProvider.FetchEventsAsync(streamId, ct: TestContext.Current.CancellationToken);
+        stream.Count.ShouldBe(1);
+
+        var header = await evtProvider.GetStreamHeaderAsync(streamId, ct: TestContext.Current.CancellationToken);
+        header.ShouldNotBeNull();
+        header.Version.ShouldBe(1);
+    }
 }

@@ -403,6 +403,9 @@ public abstract class QuerySessionBase : IQuerySession
     public IIdentityMap IdentityMap => InnerIdentityMap;
     internal StoreOptions StoreOptions => Options;
 
+    public double LastRequestCharge => Math.Max(DocumentStorage.LastRequestCharge, EventStorage.LastRequestCharge);
+    public double CumulativeRequestCharge => DocumentStorage.CumulativeRequestCharge + EventStorage.CumulativeRequestCharge;
+
     public string? CorrelationId { get; set; }
     public string? CausationId { get; set; }
 
@@ -537,12 +540,6 @@ public abstract class QuerySessionBase : IQuerySession
         }
 
         return results;
-    }
-
-    [Obsolete("Use QueryAsync<T>() to avoid sync-over-async thread pool starvation.")]
-    public IQueryable<T> Query<T>() where T : class
-    {
-        throw new NotSupportedException("Synchronous Query<T>() is disabled to prevent sync-over-async thread pool starvation. Use QueryAsync<T>() instead.");
     }
 
     public Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class
@@ -744,12 +741,16 @@ public abstract class QuerySessionBase : IQuerySession
         if (options.Skip.HasValue)
         {
             int pageNumber = pageSize > 0 ? (options.Skip.Value / pageSize) + 1 : 1;
-            return new PagedResult<T>(unwrappedItems, pageNumber, pageSize, result.TotalCount);
+            return new PagedResult<T>(unwrappedItems, pageNumber, pageSize, result.TotalCount)
+            {
+                RequestCharge = result.RequestCharge
+            };
         }
 
         return new PagedResult<T>(unwrappedItems, result.ContinuationToken, pageSize)
         {
-            TotalCount = result.TotalCount
+            TotalCount = result.TotalCount,
+            RequestCharge = result.RequestCharge
         };
     }
 

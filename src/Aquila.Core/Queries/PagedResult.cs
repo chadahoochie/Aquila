@@ -37,6 +37,11 @@ public sealed class PagedResult<T>
     public int? PageSize { get; init; }
 
     /// <summary>
+    /// The Azure Cosmos DB request charge (in Request Units, RU) consumed by this operation, if available.
+    /// </summary>
+    public double RequestCharge { get; init; }
+
+    /// <summary>
     /// Default parameterless constructor.
     /// </summary>
     public PagedResult()

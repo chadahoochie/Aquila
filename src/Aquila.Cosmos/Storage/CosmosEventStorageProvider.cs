@@ -44,6 +44,15 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
     private Container SnapshotContainer => (_snapshotContainerProvider ?? _eventContainerProvider)();
 
     public string ProviderName => "AzureCosmosDB";
+    public double LastRequestCharge { get; private set; }
+    public double CumulativeRequestCharge { get; private set; }
+
+    private void RecordCharge(double charge)
+    {
+        LastRequestCharge = charge;
+        CumulativeRequestCharge += charge;
+    }
+
     public Task InitializeAsync(CancellationToken ct = default) => InitializeSequenceAsync(ct);
     public void Dispose() { }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -153,6 +162,10 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 batch.UpsertItem(batchHeaderDoc);
 
                 using var response = await batch.ExecuteAsync(ct).ConfigureAwait(false);
+                if (response != null)
+                {
+                    RecordCharge(response.RequestCharge);
+                }
 
                 if (response != null && response.IsSuccessStatusCode)
                 {
@@ -270,9 +283,11 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             queryDef, requestOptions: new QueryRequestOptions { PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(streamId) });
         if (iterator == null) return events;
 
+        double totalCharge = 0.0;
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(ct);
+            totalCharge += response.RequestCharge;
             foreach (var item in response)
             {
                 IEvent? @event = item.Data as IEvent;
@@ -305,6 +320,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             }
         }
 
+        RecordCharge(totalCharge);
         return events.OrderBy(e => e.Version).ToList();
     }
 
@@ -333,11 +349,13 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef, requestOptions: requestOptions);
         if (iterator == null) return events;
 
+        double globalCharge = 0.0;
         try
         {
             while (iterator.HasMoreResults && events.Count < batchSize)
             {
                 var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+                globalCharge += response.RequestCharge;
                 foreach (var item in response)
                 {
                     IEvent? @event = item.Data as IEvent;
@@ -371,6 +389,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 }
             }
 
+            RecordCharge(globalCharge);
             return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.InternalServerError || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
@@ -402,11 +421,13 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef, requestOptions: requestOptions);
         if (iterator == null) return events;
 
+        double totalCharge = 0.0;
         try
         {
             while (iterator.HasMoreResults)
             {
                 var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+                totalCharge += response.RequestCharge;
                 foreach (var item in response)
                 {
                     IEvent? @event = item.Data as IEvent;
@@ -438,14 +459,15 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                     }
                 }
             }
-        }
-        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.InternalServerError || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
-        {
-            _logger?.LogWarning(ex, "Unsorted server-side query with filter also failed ({StatusCode}). Falling back to docType-only query.", ex.StatusCode);
-            return await FetchGlobalEventsDocTypeFallbackAsync(fromGlobalSequence, batchSize, tenantId, ct).ConfigureAwait(false);
-        }
 
-        return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+            RecordCharge(totalCharge);
+            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to fetch global events with unsorted fallback query.");
+            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+        }
     }
 
     private async Task<IReadOnlyList<IEvent>> FetchGlobalEventsDocTypeFallbackAsync(long fromGlobalSequence, int batchSize, string? tenantId, CancellationToken ct)
@@ -521,6 +543,8 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 CosmosPartitionKeyHelper.CreatePartitionKey(streamId),
                 cancellationToken: ct);
 
+            RecordCharge(resp.RequestCharge);
+
             if (resp?.Resource == null) return null;
             if (!string.IsNullOrEmpty(tenantId) && (resp.Resource.TenantId != tenantId || resp.Resource.Data?.TenantId != tenantId))
             {
@@ -531,10 +555,12 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
+            RecordCharge(ex.RequestCharge);
             return null;
         }
-        catch (CosmosException)
+        catch (CosmosException ex)
         {
+            RecordCharge(ex.RequestCharge);
             return await QueryStreamHeaderAsync(streamId, targetId, tenantId, ct);
         }
     }
@@ -549,13 +575,16 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
         if (iterator == null) return null;
 
+        double charge = 0.0;
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(ct);
+            charge += response.RequestCharge;
             foreach (var item in response)
             {
                 if (item != null && !item.IsDeleted)
                 {
+                    RecordCharge(charge);
                     if (!string.IsNullOrEmpty(tenantId) && (item.TenantId != tenantId || item.Data?.TenantId != tenantId))
                     {
                         return null;
@@ -565,6 +594,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             }
         }
 
+        RecordCharge(charge);
         return null;
     }
 
@@ -584,7 +614,8 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             Data = snapshot
         };
 
-        await SnapshotContainer.UpsertItemAsync(snapshotDoc, CosmosPartitionKeyHelper.CreatePartitionKey(streamId), cancellationToken: ct);
+        var response = await SnapshotContainer.UpsertItemAsync(snapshotDoc, CosmosPartitionKeyHelper.CreatePartitionKey(streamId), cancellationToken: ct);
+        RecordCharge(response.RequestCharge);
     }
 
     public async Task<(TAggregate? Snapshot, long SnapshotVersion)> GetSnapshotAsync<TAggregate>(string streamId, string tenantId = "default", CancellationToken ct = default) where TAggregate : class
@@ -604,6 +635,8 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 CosmosPartitionKeyHelper.CreatePartitionKey(streamId),
                 cancellationToken: ct);
 
+            RecordCharge(resp.RequestCharge);
+
             if (resp?.Resource == null || resp.Resource.IsDeleted) return (null, 0);
             if (!string.IsNullOrEmpty(tenantId) && resp.Resource.TenantId != tenantId)
             {
@@ -619,10 +652,12 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
+            RecordCharge(ex.RequestCharge);
             return (null, 0);
         }
-        catch (CosmosException)
+        catch (CosmosException ex)
         {
+            RecordCharge(ex.RequestCharge);
             return await QuerySnapshotAsync<TAggregate>(streamId, targetId, tenantId, ct);
         }
     }
@@ -637,13 +672,16 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
         if (iterator == null) return (null, 0);
 
+        double charge = 0.0;
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(ct);
+            charge += response.RequestCharge;
             foreach (var item in response)
             {
                 if (item != null && !item.IsDeleted)
                 {
+                    RecordCharge(charge);
                     if (!string.IsNullOrEmpty(tenantId) && item.TenantId != tenantId)
                     {
                         return (null, 0);
@@ -659,6 +697,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             }
         }
 
+        RecordCharge(charge);
         return (null, 0);
     }
 }
