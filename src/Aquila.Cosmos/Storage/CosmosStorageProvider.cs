@@ -185,6 +185,9 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
     public Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class =>
         _documents.QueryDocumentsAsync(predicate, options, ct);
 
+    public Task<StorageQueryResult<T>> QueryPagedDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class =>
+        _documents.QueryPagedDocumentsAsync(predicate, options, ct);
+
     public Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class =>
         _documents.UpsertDocumentAsync(envelope, ct);
 

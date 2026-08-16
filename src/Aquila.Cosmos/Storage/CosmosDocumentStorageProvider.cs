@@ -103,16 +103,17 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             {
                 requestOptions.PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(options.PartitionKey);
             }
-            if (options.MaxItemCount.HasValue)
+            if (options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0)
             {
                 requestOptions.MaxItemCount = options.MaxItemCount.Value;
             }
         }
 
         var docType = typeof(T).Name;
+        var safeContinuationToken = string.IsNullOrWhiteSpace(options?.ContinuationToken) ? null : options.ContinuationToken;
         IQueryable<CosmosDocumentEnvelope<T>>? queryable = container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>(
             false,
-            options?.ContinuationToken,
+            safeContinuationToken,
             requestOptions);
 
         if (queryable == null || queryable.Provider == null)
@@ -129,6 +130,15 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             {
                 queryable = queryable.Where(rewritten);
             }
+        }
+
+        if (options != null && options.Skip.HasValue && options.Skip.Value > 0)
+        {
+            queryable = queryable.Skip(options.Skip.Value);
+        }
+        if (options != null && options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0 && options.Skip.HasValue)
+        {
+            queryable = queryable.Take(options.MaxItemCount.Value);
         }
 
         var results = new List<DocumentEnvelope<T>>();
@@ -156,7 +166,7 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
 
             using var iterator = container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
                 queryDef,
-                continuationToken: options?.ContinuationToken,
+                continuationToken: safeContinuationToken,
                 requestOptions: requestOptions);
 
             while (iterator.HasMoreResults)
@@ -177,6 +187,108 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
         }
 
         return results;
+    }
+
+    public async Task<StorageQueryResult<T>> QueryPagedDocumentsAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        QueryOptions? options = null,
+        CancellationToken ct = default) where T : class
+    {
+        var container = GetContainer<T>();
+        var requestOptions = new QueryRequestOptions();
+        if (options != null)
+        {
+            if (!string.IsNullOrEmpty(options.PartitionKey))
+            {
+                requestOptions.PartitionKey = CosmosPartitionKeyHelper.CreatePartitionKey(options.PartitionKey);
+            }
+            if (options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0)
+            {
+                requestOptions.MaxItemCount = options.MaxItemCount.Value;
+            }
+        }
+
+        var docType = typeof(T).Name;
+        var safeContinuationToken = string.IsNullOrWhiteSpace(options?.ContinuationToken) ? null : options.ContinuationToken;
+        IQueryable<CosmosDocumentEnvelope<T>>? queryable = container.GetItemLinqQueryable<CosmosDocumentEnvelope<T>>(
+            false,
+            safeContinuationToken,
+            requestOptions);
+
+        if (queryable == null || queryable.Provider == null)
+        {
+            return new StorageQueryResult<T>(Array.Empty<DocumentEnvelope<T>>(), null, 0);
+        }
+
+        queryable = queryable.Where(x => x.DocType == docType && !x.IsDeleted);
+
+        if (predicate != null)
+        {
+            var rewritten = CosmosExpressionRewriter.Rewrite(predicate);
+            if (rewritten != null)
+            {
+                queryable = queryable.Where(rewritten);
+            }
+        }
+
+        if (options != null && options.Skip.HasValue && options.Skip.Value > 0)
+        {
+            queryable = queryable.Skip(options.Skip.Value);
+        }
+        if (options != null && options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0 && options.Skip.HasValue)
+        {
+            queryable = queryable.Take(options.MaxItemCount.Value);
+        }
+
+        var results = new List<DocumentEnvelope<T>>();
+        string? nextContinuationToken = null;
+
+        try
+        {
+            var queryDef = queryable.ToQueryDefinition();
+            var sql = queryDef.QueryText;
+
+            if (sql.StartsWith("SELECT VALUE root"))
+            {
+                sql = "SELECT *" + sql.Substring("SELECT VALUE root".Length);
+                var rewrittenDef = new QueryDefinition(sql);
+                foreach (var (name, value) in queryDef.GetQueryParameters())
+                {
+                    rewrittenDef = rewrittenDef.WithParameter(name, value);
+                }
+                queryDef = rewrittenDef;
+            }
+
+            using var iterator = container.GetItemQueryIterator<CosmosDocumentEnvelope<T>>(
+                queryDef,
+                continuationToken: safeContinuationToken,
+                requestOptions: requestOptions);
+
+            if (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync(ct);
+                foreach (var item in response)
+                {
+                    results.Add(MapToEnvelope(item));
+                }
+                nextContinuationToken = response.ContinuationToken;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException || ex is ArgumentOutOfRangeException || ex is ArgumentException)
+        {
+            var allItems = queryable.ToList().Select(MapToEnvelope).ToList();
+            int totalCount = allItems.Count;
+            if (options != null && options.Skip.HasValue && options.Skip.Value >= 0)
+            {
+                int skip = options.Skip.Value;
+                int take = (options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0) ? options.MaxItemCount.Value : totalCount;
+                var paged = allItems.Skip(skip).Take(take).ToList();
+                return new StorageQueryResult<T>(paged, null, totalCount);
+            }
+            return new StorageQueryResult<T>(allItems, null, totalCount);
+        }
+
+        return new StorageQueryResult<T>(results, nextContinuationToken);
     }
 
     public async Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class

@@ -1,12 +1,13 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
+using Aquila.Core.Storage;
 
 namespace Aquila.Core.Queries;
 
 public static class CompiledQueryCache
 {
-    private static readonly ConcurrentDictionary<Type, object> _cache = new();
+    private static readonly ConcurrentDictionary<object, object> _cache = new();
 
     public static TResult Execute<TDoc, TResult>(IQueryable<TDoc> queryable, ICompiledQuery<TDoc, TResult> query) where TDoc : class
     {
@@ -20,14 +21,14 @@ public static class CompiledQueryCache
             var expression = query.QueryIs();
             if (expression == null)
             {
-                throw new InvalidOperationException($"QueryIs() returned null for compiled query type '{t.FullName}'.");
+                throw new InvalidOperationException($"QueryIs() returned null for compiled query type '{((Type)t).FullName}'.");
             }
 
             var queryableParam = expression.Parameters[0];
             var queryParam = Expression.Parameter(typeof(object), "query");
-            var typedQueryParam = Expression.Convert(queryParam, t);
+            var typedQueryParam = Expression.Convert(queryParam, (Type)t);
 
-            var rewriter = new QueryParameterBindingVisitor(query, t, typedQueryParam);
+            var rewriter = new QueryParameterBindingVisitor(query, (Type)t, typedQueryParam);
             var newBody = rewriter.Visit(expression.Body);
 
             var lambda = Expression.Lambda<Func<IQueryable<TDoc>, object, TResult>>(newBody, queryableParam, queryParam);
@@ -35,6 +36,12 @@ public static class CompiledQueryCache
         });
 
         return compiledDelegate(queryable, query);
+    }
+
+    public static Expression<Func<DocumentEnvelope<TDoc>, bool>>? ExtractPredicate<TDoc>(ICompiledPagedQuery<TDoc> query) where TDoc : class
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return query.Predicate();
     }
 
     public static void Clear()

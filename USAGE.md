@@ -541,3 +541,135 @@ await session.SaveChangesAsync();
 ```
 
 Each appended [`IEvent`](src/Aquila.Core/Events/IEvent.cs) envelope inherits the session's `CorrelationId`/`CausationId`/`Headers` at the moment of `Append`/`StartStream` (see [`CoreEventStore.ApplyHeaders`](src/Aquila.Core/Sessions/QuerySession.cs#L120)), falling back to values already present on the source event object (e.g. from a prior upcast) when the session does not set its own.
+
+---
+
+## 15. Document Paging & Continuation Tokens
+
+For large document collections, Aquila provides constant-RU cursor pagination via continuation tokens through [`PagedResult<T>`](src/Aquila.Core/Queries/PagedResult.cs) and `IQuerySession.QueryPagedAsync<T>()`.
+
+### 1. Continuation Token Paging (Cursor Paging)
+
+```csharp
+using Aquila.Core.Queries;
+
+using var session = store.QuerySession();
+
+// Fetch initial page
+PagedResult<Customer> page1 = await session.QueryPagedAsync<Customer>(
+    predicate: c => c.Data.Region == "US-East",
+    pageSize: 20
+);
+
+foreach (var customer in page1.Items)
+{
+    Console.WriteLine($"Customer: {customer.Name}");
+}
+
+// Fetch subsequent page using continuation token
+if (page1.HasMore)
+{
+    PagedResult<Customer> page2 = await session.QueryPagedAsync<Customer>(
+        predicate: c => c.Data.Region == "US-East",
+        pageSize: 20,
+        continuationToken: page1.ContinuationToken
+    );
+}
+```
+
+### 2. ASP.NET Core API Controller Integration
+
+```csharp
+[HttpGet("api/customers")]
+public async Task<IActionResult> GetCustomers(
+    [FromQuery] string? continuationToken = null,
+    [FromQuery] int pageSize = 20,
+    CancellationToken ct = default)
+{
+    using var session = _documentStore.QuerySession();
+
+    var page = await session.QueryPagedAsync<Customer>(
+        pageSize: pageSize,
+        continuationToken: continuationToken,
+        ct: ct);
+
+    return Ok(new
+    {
+        items = page.Items,
+        continuationToken = page.ContinuationToken,
+        hasMore = page.HasMore
+    });
+}
+```
+
+### 3. Offset-Based Paging (`Skip` / `Take`)
+
+When random page navigation is required (e.g. jumping directly to Page 3), use `QueryPagedByOffsetAsync`:
+
+```csharp
+using var session = store.QuerySession();
+
+// Page 3 with 10 items per page (Skips 20, Takes 10)
+PagedResult<Customer> page3 = await session.QueryPagedByOffsetAsync<Customer>(
+    pageNumber: 3,
+    pageSize: 10,
+    predicate: c => c.Data.Status == "Active"
+);
+
+Console.WriteLine($"Total matching customers: {page3.TotalCount}");
+```
+
+---
+
+## 16. Asynchronous Streaming & Compiled Paged Queries
+
+### 1. Reactive Page & Document Streaming via `IAsyncEnumerable<T>`
+
+Stream through millions of documents efficiently without buffering the entire result set into memory:
+
+```csharp
+using var session = store.QuerySession();
+
+// Stream items individually across pages:
+await foreach (var customer in session.StreamAsync<Customer>(batchSize: 100))
+{
+    await ProcessCustomerAsync(customer);
+}
+
+// Or stream page batches:
+await foreach (PagedResult<Customer> page in session.StreamPagesAsync<Customer>(pageSize: 100))
+{
+    Console.WriteLine($"Processing batch of {page.Items.Count} customers...");
+}
+```
+
+### 2. Compiled Paged Queries
+
+For high-frequency paged queries, define strongly-typed [`ICompiledPagedQuery<TDoc>`](src/Aquila.Core/Queries/ICompiledPagedQuery.cs) instances:
+
+```csharp
+using System.Linq.Expressions;
+using Aquila.Core.Queries;
+using Aquila.Core.Storage;
+
+public class ActiveCustomersPagedQuery : ICompiledPagedQuery<Customer>
+{
+    public int PageSize { get; init; } = 25;
+    public string? ContinuationToken { get; init; }
+    public string? PartitionKey { get; init; }
+    public string TargetRegion { get; init; } = "US-East";
+
+    public Expression<Func<DocumentEnvelope<Customer>, bool>>? Predicate() =>
+        env => env.Data.Region == TargetRegion && env.Data.Status == "Active";
+}
+
+// Execution:
+var query = new ActiveCustomersPagedQuery
+{
+    TargetRegion = "US-East",
+    PageSize = 25,
+    ContinuationToken = lastToken
+};
+
+PagedResult<Customer> results = await session.QueryPagedAsync(query);
+```

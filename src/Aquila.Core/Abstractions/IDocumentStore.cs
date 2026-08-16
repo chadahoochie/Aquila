@@ -52,6 +52,13 @@ public interface IQuerySession : IDisposable, IAsyncDisposable
     Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class;
     Task<TResult> QueryAsync<TDoc, TResult>(ICompiledQuery<TDoc, TResult> query, CancellationToken ct = default) where TDoc : class;
 
+    Task<PagedResult<T>> QueryPagedAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, int pageSize = 20, string? continuationToken = null, string? partitionKey = null, CancellationToken ct = default) where T : class;
+    Task<PagedResult<T>> QueryPagedByOffsetAsync<T>(int pageNumber, int pageSize, Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, string? partitionKey = null, CancellationToken ct = default) where T : class;
+    Task<PagedResult<TDoc>> QueryPagedAsync<TDoc>(ICompiledPagedQuery<TDoc> query, CancellationToken ct = default) where TDoc : class;
+
+    IAsyncEnumerable<T> StreamAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, string? partitionKey = null, int batchSize = 100, CancellationToken ct = default) where T : class;
+    IAsyncEnumerable<PagedResult<T>> StreamPagesAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, string? partitionKey = null, int pageSize = 100, string? initialContinuationToken = null, CancellationToken ct = default) where T : class;
+
     Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, CancellationToken ct = default) where TDoc : class, new();
     Task<TDoc?> LiveStreamAsync<TDoc>(string streamId, string? tenantId, CancellationToken ct = default) where TDoc : class, new();
     Task<TDoc?> LiveStreamAsync<TDoc>(Guid streamId, CancellationToken ct = default) where TDoc : class, new();

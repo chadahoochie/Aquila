@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using System.Runtime.CompilerServices;
 using Newtonsoft.Json;
 using Aquila.Core.Abstractions;
 using Aquila.Core.Configuration;
@@ -619,6 +620,106 @@ public abstract class QuerySessionBase : IQuerySession
         var queryable = documents.AsQueryable();
 
         return CompiledQueryCache.Execute(queryable, query);
+    }
+
+    public async Task<PagedResult<T>> QueryPagedAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        int pageSize = 20,
+        string? continuationToken = null,
+        string? partitionKey = null,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        var fullPredicate = CombineWithTenantId(predicate);
+        var options = new QueryOptions
+        {
+            PartitionKey = partitionKey,
+            MaxItemCount = pageSize,
+            ContinuationToken = string.IsNullOrWhiteSpace(continuationToken) ? null : continuationToken
+        };
+
+        var result = await DocumentStorage.QueryPagedDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
+        var unwrappedItems = TrackAndUnwrap(result.Documents);
+
+        return new PagedResult<T>(unwrappedItems, result.ContinuationToken, pageSize)
+        {
+            TotalCount = result.TotalCount
+        };
+    }
+
+    public async Task<PagedResult<T>> QueryPagedByOffsetAsync<T>(
+        int pageNumber,
+        int pageSize,
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        string? partitionKey = null,
+        CancellationToken ct = default) where T : class
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageNumber);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        var fullPredicate = CombineWithTenantId(predicate);
+        int skip = (pageNumber - 1) * pageSize;
+
+        var options = new QueryOptions
+        {
+            PartitionKey = partitionKey,
+            MaxItemCount = pageSize,
+            Skip = skip
+        };
+
+        var result = await DocumentStorage.QueryPagedDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
+        var unwrappedItems = TrackAndUnwrap(result.Documents);
+
+        return new PagedResult<T>(unwrappedItems, pageNumber, pageSize, result.TotalCount);
+    }
+
+    public async Task<PagedResult<TDoc>> QueryPagedAsync<TDoc>(
+        ICompiledPagedQuery<TDoc> query,
+        CancellationToken ct = default) where TDoc : class
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(query.PageSize);
+
+        var predicate = CompiledQueryCache.ExtractPredicate(query);
+        return await QueryPagedAsync(predicate, query.PageSize, query.ContinuationToken, query.PartitionKey, ct).ConfigureAwait(false);
+    }
+
+    public async IAsyncEnumerable<PagedResult<T>> StreamPagesAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        string? partitionKey = null,
+        int pageSize = 100,
+        string? initialContinuationToken = null,
+        [EnumeratorCancellation] CancellationToken ct = default) where T : class
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        string? currentToken = string.IsNullOrWhiteSpace(initialContinuationToken) ? null : initialContinuationToken;
+        bool isFirstPage = true;
+
+        while ((isFirstPage || !string.IsNullOrWhiteSpace(currentToken)) && !ct.IsCancellationRequested)
+        {
+            isFirstPage = false;
+            var page = await QueryPagedAsync<T>(predicate, pageSize, currentToken, partitionKey, ct).ConfigureAwait(false);
+            yield return page;
+            currentToken = page.ContinuationToken;
+        }
+    }
+
+    public async IAsyncEnumerable<T> StreamAsync<T>(
+        Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
+        string? partitionKey = null,
+        int batchSize = 100,
+        [EnumeratorCancellation] CancellationToken ct = default) where T : class
+    {
+        await foreach (var page in StreamPagesAsync<T>(predicate, partitionKey, batchSize, null, ct).ConfigureAwait(false))
+        {
+            foreach (var item in page.Items)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return item;
+            }
+        }
     }
 
     public Task<TDoc?> LiveStreamAsync<TDoc>(Guid streamId, CancellationToken ct = default) where TDoc : class, new()
