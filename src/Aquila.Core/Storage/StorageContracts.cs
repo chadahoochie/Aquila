@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Aquila.Core.Events;
+using Aquila.Core.Queries;
 
 namespace Aquila.Core.Storage;
 
@@ -71,6 +72,39 @@ public sealed class QueryOptions
     public int? MaxItemCount { get; set; }
     public string? ContinuationToken { get; set; }
     public int? Skip { get; set; }
+    public List<SortDescriptor> Orderings { get; set; } = new();
+
+    public QueryOptions OrderBy(LambdaExpression keySelector, SortOrder direction = SortOrder.Ascending)
+    {
+        ArgumentNullException.ThrowIfNull(keySelector);
+        Orderings.Add(new SortDescriptor(keySelector, direction));
+        return this;
+    }
+
+    public QueryOptions OrderByDescending(LambdaExpression keySelector) =>
+        OrderBy(keySelector, SortOrder.Descending);
+
+    public QueryOptions ThenBy(LambdaExpression keySelector, SortOrder direction = SortOrder.Ascending) =>
+        OrderBy(keySelector, direction);
+
+    public QueryOptions ThenByDescending(LambdaExpression keySelector) =>
+        OrderBy(keySelector, SortOrder.Descending);
+
+    public QueryOptions OrderBy<T>(Expression<Func<DocumentEnvelope<T>, object?>> keySelector, SortOrder direction = SortOrder.Ascending)
+    {
+        ArgumentNullException.ThrowIfNull(keySelector);
+        Orderings.Add(new SortDescriptor(keySelector, direction));
+        return this;
+    }
+
+    public QueryOptions OrderByDescending<T>(Expression<Func<DocumentEnvelope<T>, object?>> keySelector) =>
+        OrderBy<T>(keySelector, SortOrder.Descending);
+
+    public QueryOptions ThenBy<T>(Expression<Func<DocumentEnvelope<T>, object?>> keySelector, SortOrder direction = SortOrder.Ascending) =>
+        OrderBy<T>(keySelector, direction);
+
+    public QueryOptions ThenByDescending<T>(Expression<Func<DocumentEnvelope<T>, object?>> keySelector) =>
+        OrderBy<T>(keySelector, SortOrder.Descending);
 }
 
 /// <summary>

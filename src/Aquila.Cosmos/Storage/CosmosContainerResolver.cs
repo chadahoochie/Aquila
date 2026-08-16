@@ -93,17 +93,17 @@ public sealed class CosmosContainerResolver
             switch (_options.Projections.Mode)
             {
                 case ProjectionStorageMode.AutoContainerPerProjection:
-                {
-                    var targetDb = _options.Projections.Database ?? _options.DefaultDatabase;
-                    var containerName = _options.Projections.ContainerNameFormatter(projType != typeof(IProjection) ? projType : documentType);
-                    return (targetDb, containerName);
-                }
+                    {
+                        var targetDb = _options.Projections.Database ?? _options.DefaultDatabase;
+                        var containerName = _options.Projections.ContainerNameFormatter(projType != typeof(IProjection) ? projType : documentType);
+                        return (targetDb, containerName);
+                    }
                 case ProjectionStorageMode.DedicatedContainer:
-                {
-                    var targetDb = _options.Projections.Database ?? _options.DefaultDatabase;
-                    var containerName = _options.Projections.Container ?? "Projections";
-                    return (targetDb, containerName);
-                }
+                    {
+                        var targetDb = _options.Projections.Database ?? _options.DefaultDatabase;
+                        var containerName = _options.Projections.Container ?? "Projections";
+                        return (targetDb, containerName);
+                    }
                 case ProjectionStorageMode.InheritDocuments:
                 default:
                     return _options.Documents.Resolve(_options.DefaultDatabase);

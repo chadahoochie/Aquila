@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.Cosmos.Linq;
+using Aquila.Core.Queries;
 using Aquila.Core.Storage;
 
 namespace Aquila.Cosmos.Storage;
@@ -132,6 +133,11 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             }
         }
 
+        if (options?.Orderings != null && options.Orderings.Count > 0)
+        {
+            queryable = ApplyOrdering(queryable, options.Orderings);
+        }
+
         if (options != null && options.Skip.HasValue && options.Skip.Value > 0)
         {
             queryable = queryable.Skip(options.Skip.Value);
@@ -229,6 +235,11 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             {
                 queryable = queryable.Where(rewritten);
             }
+        }
+
+        if (options?.Orderings != null && options.Orderings.Count > 0)
+        {
+            queryable = ApplyOrdering(queryable, options.Orderings);
         }
 
         if (options != null && options.Skip.HasValue && options.Skip.Value > 0)
@@ -596,5 +607,51 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
             ETag = item.ETag,
             Data = item.Data
         };
+    }
+
+    internal static IQueryable<CosmosDocumentEnvelope<T>> ApplyOrdering<T>(
+        IQueryable<CosmosDocumentEnvelope<T>> queryable,
+        IReadOnlyList<SortDescriptor>? orderings) where T : class
+    {
+        if (orderings == null || orderings.Count == 0)
+        {
+            return queryable;
+        }
+
+        for (int i = 0; i < orderings.Count; i++)
+        {
+            var descriptor = orderings[i];
+            if (descriptor?.KeySelector == null) continue;
+
+            var rewritten = CosmosExpressionRewriter.Rewrite<T>(descriptor.KeySelector);
+            if (rewritten == null) continue;
+
+            var body = rewritten.Body;
+            while (body is UnaryExpression u && (u.NodeType == ExpressionType.Convert || u.NodeType == ExpressionType.ConvertChecked) && (u.Type == typeof(object) || u.Type.IsAssignableFrom(u.Operand.Type)))
+            {
+                body = u.Operand;
+            }
+
+            var keyType = body.Type;
+            var lambda = Expression.Lambda(body, rewritten.Parameters);
+
+            string methodName;
+            if (i == 0)
+            {
+                methodName = descriptor.Direction == SortOrder.Ascending ? nameof(Queryable.OrderBy) : nameof(Queryable.OrderByDescending);
+            }
+            else
+            {
+                methodName = descriptor.Direction == SortOrder.Ascending ? nameof(Queryable.ThenBy) : nameof(Queryable.ThenByDescending);
+            }
+
+            var method = typeof(Queryable).GetMethods()
+                .First(m => m.Name == methodName && m.GetParameters().Length == 2)
+                .MakeGenericMethod(typeof(CosmosDocumentEnvelope<T>), keyType);
+
+            queryable = (IQueryable<CosmosDocumentEnvelope<T>>)method.Invoke(null, new object[] { queryable, lambda })!;
+        }
+
+        return queryable;
     }
 }

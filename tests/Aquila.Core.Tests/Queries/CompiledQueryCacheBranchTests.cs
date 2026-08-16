@@ -176,7 +176,7 @@ public class DerivedQueryDocQuery : BaseQueryDocQuery
     public override Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
     {
         var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
-        
+
         var subInstance = new SubDerivedQueryDocQuery { Email = "alice@example.com" };
         var subConst = Expression.Constant(subInstance, typeof(SubDerivedQueryDocQuery));
         var emailProp = Expression.Property(subConst, nameof(Email));
@@ -206,13 +206,13 @@ public class QueryWithNullAndUnrelatedConstant : ICompiledQuery<UserDoc, UserDoc
     public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
     {
         var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
-        
+
         var nullConst = Expression.Constant(null, typeof(string));
         var unrelatedConst = Expression.Constant("unrelated_value", typeof(string));
 
         var uParam = Expression.Parameter(typeof(UserDoc), "u");
         var uEmailProp = Expression.Property(uParam, nameof(UserDoc.Email));
-        
+
         var notNull = Expression.NotEqual(uEmailProp, nullConst);
         var notUnrelated = Expression.NotEqual(uEmailProp, unrelatedConst);
         var combined = Expression.AndAlso(notNull, notUnrelated);
@@ -237,7 +237,7 @@ public class QueryWithMemberOnSameTypeInstance : ICompiledQuery<UserDoc, UserDoc
     public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
     {
         var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
-        
+
         var secondInstance = new QueryWithMemberOnSameTypeInstance { Email = "bob@example.com" };
         var secondConst = Expression.Constant(secondInstance, typeof(QueryWithMemberOnSameTypeInstance));
         var emailProp = Expression.Property(secondConst, nameof(Email));
@@ -276,7 +276,7 @@ public class QueryWithFieldClosureDisjuncts : ICompiledQuery<UserDoc, UserDoc?>
     public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
     {
         var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
-        
+
         var holderConst = Expression.Constant(_holder, typeof(FieldClosureHolder));
         var fieldExpr = Expression.Field(holderConst, nameof(FieldClosureHolder.QueryField));
         var typedField = Expression.Convert(fieldExpr, typeof(QueryWithFieldClosureDisjuncts));
@@ -321,7 +321,7 @@ public class QueryWithPropClosureDisjuncts : ICompiledQuery<UserDoc, UserDoc?>
     public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
     {
         var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
-        
+
         var holderConst = Expression.Constant(_holder, typeof(PropClosureHolder));
         var propExpr = Expression.Property(holderConst, nameof(PropClosureHolder.QueryProp));
         var typedProp = Expression.Convert(propExpr, typeof(QueryWithPropClosureDisjuncts));
@@ -359,7 +359,7 @@ public class QueryWithUnrelatedMemberAccess : ICompiledQuery<UserDoc, UserDoc?>
     public Expression<Func<IQueryable<UserDoc>, UserDoc?>> QueryIs()
     {
         var usersParam = Expression.Parameter(typeof(IQueryable<UserDoc>), "users");
-        
+
         var holder = new UnrelatedHolder();
         var holderConst = Expression.Constant(holder, typeof(UnrelatedHolder));
         var fieldExpr = Expression.Field(holderConst, nameof(UnrelatedHolder.UnrelatedField));
@@ -367,7 +367,7 @@ public class QueryWithUnrelatedMemberAccess : ICompiledQuery<UserDoc, UserDoc?>
 
         var uParam = Expression.Parameter(typeof(UserDoc), "u");
         var uEmailProp = Expression.Property(uParam, nameof(UserDoc.Email));
-        
+
         var equal1 = Expression.NotEqual(uEmailProp, fieldExpr);
         var equal2 = Expression.NotEqual(uEmailProp, propExpr);
         var combined = Expression.AndAlso(equal1, equal2);

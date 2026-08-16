@@ -123,7 +123,7 @@ public sealed class DefaultSqlExpressionTranslatorBranchTests
         var allowedArray = new[] { 1, 2 };
         var param = Expression.Parameter(typeof(DocumentEnvelope<TestUser>), "u");
         var ageProp = Expression.Property(Expression.Property(param, nameof(DocumentEnvelope<TestUser>.Data)), nameof(TestUser.Age));
-        
+
         var arrayConst = Expression.Constant(allowedArray);
         var convertChecked = Expression.ConvertChecked(arrayConst, typeof(IEnumerable<int>));
         var containsMethod = typeof(Enumerable).GetMethods()

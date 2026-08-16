@@ -2,6 +2,7 @@ using System.Collections;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using Aquila.Core.Queries;
 
 namespace Aquila.Core.Storage;
 
@@ -38,6 +39,43 @@ public class DefaultSqlExpressionTranslator : ExpressionVisitor, ISqlExpressionT
             SqlClause = sqlClause,
             Parameters = new Dictionary<string, object>(_parameters)
         };
+    }
+
+    public string TranslateOrderBy<T>(Expression<Func<DocumentEnvelope<T>, object?>> orderBy, SortOrder direction = SortOrder.Ascending)
+    {
+        ArgumentNullException.ThrowIfNull(orderBy);
+        return TranslateOrderBy(new[] { new SortDescriptor(orderBy, direction) });
+    }
+
+    public string TranslateOrderBy(IEnumerable<SortDescriptor> orderings)
+    {
+        ArgumentNullException.ThrowIfNull(orderings);
+        var orderList = orderings.Where(o => o != null && o.KeySelector != null).ToList();
+        if (orderList.Count == 0) return string.Empty;
+
+        var clauses = new List<string>(orderList.Count);
+        foreach (var ord in orderList)
+        {
+            var param = ord.KeySelector.Parameters[0];
+            var body = ord.KeySelector.Body;
+            while (body is UnaryExpression u && (u.NodeType == ExpressionType.Convert || u.NodeType == ExpressionType.ConvertChecked))
+            {
+                body = u.Operand;
+            }
+
+            if (body is MemberExpression memberExpr && IsParameterRooted(memberExpr, param))
+            {
+                var path = GetMemberPath(memberExpr, param);
+                var dirSql = ord.Direction == SortOrder.Descending ? "DESC" : "ASC";
+                clauses.Add($"{path} {dirSql}");
+            }
+            else
+            {
+                throw new NotSupportedException($"Order expression '{ord.KeySelector}' is not a supported property access.");
+            }
+        }
+
+        return clauses.Count > 0 ? "ORDER BY " + string.Join(", ", clauses) : string.Empty;
     }
 
     protected override Expression VisitBinary(BinaryExpression node)
