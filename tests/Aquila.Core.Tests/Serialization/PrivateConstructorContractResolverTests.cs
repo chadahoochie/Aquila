@@ -114,4 +114,28 @@ public sealed class PrivateConstructorContractResolverTests
         deserialized.Description.ShouldBe("Test item");
         deserialized.Price.ShouldBe(99.99m);
     }
+
+    private enum OrderStatus
+    {
+        Pending,
+        Processing,
+        Completed,
+        Cancelled
+    }
+
+    private sealed record OrderWithEnum(string OrderId, OrderStatus Status);
+
+    [Fact]
+    public void Serializes_And_Deserializes_Enums_As_Strings()
+    {
+        var order = new OrderWithEnum("ORD-42", OrderStatus.Processing);
+        var json = JsonConvert.SerializeObject(order, PrivateConstructorContractResolver.Settings);
+
+        json.ShouldContain("\"Status\":\"Processing\"");
+
+        var deserialized = JsonConvert.DeserializeObject<OrderWithEnum>(json, PrivateConstructorContractResolver.Settings);
+        deserialized.ShouldNotBeNull();
+        deserialized.OrderId.ShouldBe("ORD-42");
+        deserialized.Status.ShouldBe(OrderStatus.Processing);
+    }
 }

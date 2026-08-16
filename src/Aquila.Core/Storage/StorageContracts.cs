@@ -115,14 +115,16 @@ public sealed class StorageQueryResult<T>
     public IReadOnlyList<DocumentEnvelope<T>> Documents { get; init; } = Array.Empty<DocumentEnvelope<T>>();
     public string? ContinuationToken { get; init; }
     public int? TotalCount { get; init; }
+    public double RequestCharge { get; init; }
 
     public StorageQueryResult() { }
 
-    public StorageQueryResult(IReadOnlyList<DocumentEnvelope<T>> documents, string? continuationToken = null, int? totalCount = null)
+    public StorageQueryResult(IReadOnlyList<DocumentEnvelope<T>> documents, string? continuationToken = null, int? totalCount = null, double requestCharge = 0.0)
     {
         Documents = documents ?? Array.Empty<DocumentEnvelope<T>>();
         ContinuationToken = string.IsNullOrWhiteSpace(continuationToken) ? null : continuationToken;
         TotalCount = totalCount;
+        RequestCharge = requestCharge;
     }
 }
 
@@ -132,6 +134,8 @@ public sealed class StorageQueryResult<T>
 public interface IDocumentStorageProvider : IDisposable, IAsyncDisposable
 {
     string ProviderName { get; }
+    double LastRequestCharge => 0.0;
+    double CumulativeRequestCharge => 0.0;
     Task InitializeAsync(CancellationToken ct = default);
     Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
     Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class;
@@ -147,6 +151,8 @@ public interface IDocumentStorageProvider : IDisposable, IAsyncDisposable
 public interface IEventStorageProvider : IDisposable, IAsyncDisposable
 {
     string ProviderName { get; }
+    double LastRequestCharge => 0.0;
+    double CumulativeRequestCharge => 0.0;
     Task InitializeAsync(CancellationToken ct = default);
     Task AppendEventsAsync(string streamId, IEnumerable<IEvent> events, long expectedVersion, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchEventsAsync(string streamId, string? tenantId = null, long fromVersion = 0, CancellationToken ct = default);

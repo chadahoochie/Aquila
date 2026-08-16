@@ -42,6 +42,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
 
         // Snapshot document state upon Store<T>() to isolate from post-store object mutations
         var snapshot = SnapshotDocument(document);
+        var existingEnvelope = InnerIdentityMap.GetEnvelope<T>(id);
 
         var envelope = new DocumentEnvelope<T>
         {
@@ -51,6 +52,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             TenantId = TenantId,
             IsDeleted = false,
             Version = Guid.NewGuid().ToString(),
+            ETag = existingEnvelope?.ETag,
             Data = snapshot
         };
 
@@ -437,6 +439,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             TenantId = TenantId,
             IsDeleted = false,
             Version = Guid.NewGuid().ToString(),
+            ETag = existingEnv?.ETag,
             Data = snapshot
         };
 

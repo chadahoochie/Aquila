@@ -141,4 +141,22 @@ public sealed class StoreOptionsTests
         options.DocumentStorage.ShouldBeOfType<InMemoryStorageProvider>();
         options.EventStorage.ShouldBeOfType<InMemoryStorageProvider>();
     }
+
+    [Fact]
+    public void StoreOptions_Freeze_Prevents_Further_Mutations()
+    {
+        var options = new StoreOptions();
+        options.IsReadOnly.ShouldBeFalse();
+
+        options.DefaultTenantId = "tenant-1";
+        options.Freeze();
+
+        options.IsReadOnly.ShouldBeTrue();
+        Should.Throw<InvalidOperationException>(() => options.DefaultTenantId = "tenant-2");
+        Should.Throw<InvalidOperationException>(() => options.DocumentStorage = new InMemoryStorageProvider());
+        Should.Throw<InvalidOperationException>(() => options.EventStorage = new InMemoryStorageProvider());
+        Should.Throw<InvalidOperationException>(() => options.UseInMemoryStorage());
+        Should.Throw<InvalidOperationException>(() => options.UseStorageProvider(new InMemoryStorageProvider(), new InMemoryStorageProvider()));
+        Should.Throw<InvalidOperationException>(() => options.UseStorageProvider((object)new InMemoryStorageProvider()));
+    }
 }

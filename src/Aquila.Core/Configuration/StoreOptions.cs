@@ -101,6 +101,13 @@ public sealed class DocumentMapping<T> : IDocumentMappingInfo where T : class
         return this;
     }
 
+    public DocumentMapping<T> UseIdentityAsPartitionKey()
+    {
+        PartitionKeyPropertyName = IdentityPropertyName;
+        PartitionKeySelector = IdSelector;
+        return this;
+    }
+
     public DocumentMapping<T> SoftDeleted()
     {
         UseSoftDeletes = true;
@@ -120,9 +127,23 @@ public sealed class SchemaPolicy
 
     public IReadOnlyDictionary<Type, object> Mappings => _mappings;
 
+    /// <summary>
+    /// When true, mappings without an explicit PartitionKey configuration default to using the document identity property (Id)
+    /// as the partition key, ensuring uniform write distribution and avoiding the 20GB logical partition limit.
+    /// </summary>
+    public bool UseIdentityAsDefaultPartitionKey { get; set; }
+
     public DocumentMapping<T> For<T>() where T : class
     {
-        return (DocumentMapping<T>)_mappings.GetOrAdd(typeof(T), _ => new DocumentMapping<T>());
+        return (DocumentMapping<T>)_mappings.GetOrAdd(typeof(T), _ =>
+        {
+            var mapping = new DocumentMapping<T>();
+            if (UseIdentityAsDefaultPartitionKey)
+            {
+                mapping.UseIdentityAsPartitionKey();
+            }
+            return mapping;
+        });
     }
 }
 
@@ -201,9 +222,55 @@ public sealed class EventRegistration
 
 public sealed class StoreOptions
 {
-    public string DefaultTenantId { get; set; } = "default";
-    public IDocumentStorageProvider DocumentStorage { get; set; } = new InMemoryStorageProvider();
-    public IEventStorageProvider EventStorage { get; set; } = new InMemoryStorageProvider();
+    private string _defaultTenantId = "default";
+    private IDocumentStorageProvider _documentStorage = new InMemoryStorageProvider();
+    private IEventStorageProvider _eventStorage = new InMemoryStorageProvider();
+    private bool _isFrozen;
+
+    public bool IsReadOnly => _isFrozen;
+
+    public void Freeze()
+    {
+        _isFrozen = true;
+    }
+
+    private void AssertNotFrozen()
+    {
+        if (_isFrozen)
+        {
+            throw new InvalidOperationException("StoreOptions is frozen and cannot be modified after DocumentStore has been initialized.");
+        }
+    }
+
+    public string DefaultTenantId
+    {
+        get => _defaultTenantId;
+        set
+        {
+            AssertNotFrozen();
+            _defaultTenantId = value;
+        }
+    }
+
+    public IDocumentStorageProvider DocumentStorage
+    {
+        get => _documentStorage;
+        set
+        {
+            AssertNotFrozen();
+            _documentStorage = value;
+        }
+    }
+
+    public IEventStorageProvider EventStorage
+    {
+        get => _eventStorage;
+        set
+        {
+            AssertNotFrozen();
+            _eventStorage = value;
+        }
+    }
 
     public SchemaPolicy Schema { get; } = new();
     public ProjectionRegistration Projections { get; } = new();
@@ -211,6 +278,7 @@ public sealed class StoreOptions
 
     public void UseStorageProvider(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage)
     {
+        AssertNotFrozen();
         ArgumentNullException.ThrowIfNull(documentStorage);
         ArgumentNullException.ThrowIfNull(eventStorage);
         DocumentStorage = documentStorage;
@@ -219,6 +287,7 @@ public sealed class StoreOptions
 
     public void UseStorageProvider(object provider)
     {
+        AssertNotFrozen();
         ArgumentNullException.ThrowIfNull(provider);
         if (provider is IDocumentStorageProvider docStorage)
         {
@@ -232,6 +301,7 @@ public sealed class StoreOptions
 
     public void UseInMemoryStorage()
     {
+        AssertNotFrozen();
         var provider = new InMemoryStorageProvider();
         DocumentStorage = provider;
         EventStorage = provider;

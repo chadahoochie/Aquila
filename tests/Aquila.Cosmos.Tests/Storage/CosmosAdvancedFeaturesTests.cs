@@ -6,6 +6,8 @@ using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Shouldly;
 using Aquila.Core.Events;
+using Aquila.Core.Queries;
+using Aquila.Core.Storage;
 using Aquila.Cosmos.Storage;
 
 namespace Aquila.Cosmos.Tests;
@@ -63,13 +65,20 @@ public sealed class CosmosAdvancedFeaturesTests
     [Fact]
     public void CreateDefaultContainerProperties_Configures_Composite_Indexes()
     {
-        var props = CosmosStorageProvider.CreateDefaultContainerProperties("TestContainer", "/pk");
-        props.Id.ShouldBe("TestContainer");
-        props.PartitionKeyPath.ShouldBe("/pk");
+        var docProps = CosmosStorageProvider.CreateDefaultContainerProperties("TestDocContainer", "/pk");
+        docProps.Id.ShouldBe("TestDocContainer");
+        docProps.PartitionKeyPath.ShouldBe("/pk");
+        docProps.IndexingPolicy.CompositeIndexes.Count.ShouldBeGreaterThanOrEqualTo(1);
+        docProps.IndexingPolicy.CompositeIndexes[0].ShouldContain(x => x.Path == "/_docType");
+        docProps.IndexingPolicy.ExcludedPaths.ShouldNotContain(x => x.Path == "/data/*");
 
-        props.IndexingPolicy.CompositeIndexes.Count.ShouldBeGreaterThanOrEqualTo(2);
-        props.IndexingPolicy.CompositeIndexes[0].ShouldContain(x => x.Path == "/_docType");
-        props.IndexingPolicy.CompositeIndexes[1].ShouldContain(x => x.Path == "/data/GlobalSequence");
+        var eventProps = CosmosStorageProvider.CreateDefaultEventsContainerProperties("TestEventContainer", "/pk");
+        eventProps.Id.ShouldBe("TestEventContainer");
+        eventProps.PartitionKeyPath.ShouldBe("/pk");
+        eventProps.IndexingPolicy.CompositeIndexes.Count.ShouldBeGreaterThanOrEqualTo(2);
+        eventProps.IndexingPolicy.CompositeIndexes[0].ShouldContain(x => x.Path == "/_docType");
+        eventProps.IndexingPolicy.CompositeIndexes[1].ShouldContain(x => x.Path == "/data/GlobalSequence");
+        eventProps.IndexingPolicy.ExcludedPaths.ShouldContain(x => x.Path == "/data/*");
     }
 
     [Fact]
@@ -118,5 +127,25 @@ public sealed class CosmosAdvancedFeaturesTests
         Should.Throw<ArgumentNullException>(() => new CosmosDocumentStorageProvider((Container)null!));
         Should.Throw<ArgumentNullException>(() => new CosmosEventStorageProvider((Func<Container>)null!));
         Should.Throw<ArgumentNullException>(() => new CosmosEventStorageProvider((Container)null!));
+    }
+
+    [Fact]
+    public void StorageQueryResult_And_PagedResult_Hold_RequestCharge()
+    {
+        var result = new StorageQueryResult<TestPayload>(
+            new[] { new DocumentEnvelope<TestPayload> { Id = "1", Data = new TestPayload("A", 1) } },
+            continuationToken: "tok-1",
+            totalCount: 1,
+            requestCharge: 4.52);
+
+        result.RequestCharge.ShouldBe(4.52);
+        result.ContinuationToken.ShouldBe("tok-1");
+        result.TotalCount.ShouldBe(1);
+
+        var paged = new PagedResult<TestPayload>(new[] { new TestPayload("A", 1) }, pageNumber: 1, pageSize: 10, totalCount: 1)
+        {
+            RequestCharge = 4.52
+        };
+        paged.RequestCharge.ShouldBe(4.52);
     }
 }

@@ -94,7 +94,7 @@ Choose session tracking modes based on operational needs:
 | `TrackingMode.DirtyTracking` (Default) | Enabled | Automatic (JSON diff) | Standard load-mutate-`SaveChangesAsync()` unit of work. Entities are snapshotted at load/store time; `SaveChangesAsync()` auto-detects diffs and queues updates without explicit `Store()` calls. |
 
 ### Crucial Execution Rules:
-1. **Never Invoke Synchronous `Query<T>()`**: Calling synchronous `session.Query<T>()` throws `NotSupportedException` to prevent thread-pool starvation in async applications. Always use `await session.QueryAsync<T>(...)`.
+1. **Asynchronous Query Execution**: All querying is purely non-blocking and asynchronous via `await session.QueryAsync<T>(...)`, `await session.QueryPagedAsync<T>(...)`, or `await foreach (var item in session.StreamAsync<T>(...))`. Synchronous blocking LINQ queries are excluded by design to prevent thread-pool starvation.
 2. **Document State Snapshotting on `Store(doc)`**: `session.Store()` immediately serializes and snapshots the object state. Subsequent mutations to the original entity instance in application code will NOT pollute the pending unit-of-work state prior to `SaveChangesAsync()`.
 3. **Session Lifecycle Management**: All sessions implement `IDisposable` and `IAsyncDisposable`. Always wrap session usage in `using var session = store.OpenSession()` or `await using var session = store.OpenSession()`.
 
@@ -371,6 +371,6 @@ options.Events.RegisterUpcaster<UserRegisteredUpcaster>();
 
 - [ ] Are internal/public infrastructure classes explicitly marked `sealed` for JIT devirtualization?
 - [ ] Are hot execution paths free of runtime reflection (using compiled expression delegates)?
-- [ ] Are all LINQ queries asynchronous (no sync-over-async blocking via `.Query<T>()`)?
+- [ ] Are all query operations non-blocking and asynchronous (using `QueryAsync<T>()`, `QueryPagedAsync<T>()`, `StreamAsync<T>()`)?
 - [ ] Are null checks enforced on all method inputs (`ArgumentNullException.ThrowIfNull`)?
 - [ ] Do all automated tests pass via `dotnet test Aquila.slnx`?
