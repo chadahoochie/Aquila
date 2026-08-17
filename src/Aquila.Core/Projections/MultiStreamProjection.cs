@@ -1,3 +1,4 @@
+using Aquila.Core.Abstractions;
 using Aquila.Core.Events;
 using Aquila.Core.Sessions;
 using Aquila.Core.Storage;
@@ -94,5 +95,37 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
                 session.IdentityMap.Untrack<TDoc>(docId);
             }
         }
+    }
+
+    public virtual async Task DispatchBatchAsync(IDocumentStore documentStore, IReadOnlyList<IEvent> events, int maxConcurrency, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(documentStore);
+        ArgumentNullException.ThrowIfNull(events);
+
+        var groups = events
+            .GroupBy(e => GetIdentity(e)?.ToString())
+            .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+            .ToList();
+
+        if (groups.Count == 0) return;
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, maxConcurrency),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(groups, parallelOptions, async (group, token) =>
+        {
+            using var session = (DocumentSession)documentStore.OpenSession();
+            var orderedEvents = group.OrderBy(e => e.GlobalSequence);
+
+            foreach (var evt in orderedEvents)
+            {
+                await ProcessEventAsync(session, evt, token).ConfigureAwait(false);
+            }
+
+            await session.SaveChangesAsync(token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
     }
 }

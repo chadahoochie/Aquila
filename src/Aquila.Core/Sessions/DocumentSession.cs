@@ -52,6 +52,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             TenantId = TenantId,
             IsDeleted = false,
             Version = Guid.NewGuid().ToString(),
+            ETag = existingEnvelope?.ETag,
             Data = snapshot
         };
 
@@ -443,6 +444,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             TenantId = TenantId,
             IsDeleted = false,
             Version = Guid.NewGuid().ToString(),
+            ETag = existingEnv?.ETag,
             Data = snapshot
         };
 

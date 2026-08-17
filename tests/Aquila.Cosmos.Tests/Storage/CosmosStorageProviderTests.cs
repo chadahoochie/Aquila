@@ -626,4 +626,62 @@ public sealed class CosmosStorageProviderTests
         Should.Throw<ArgumentException>(() => new CosmosStorageProvider("connStr", "db", "   "));
         Should.Throw<ArgumentException>(() => new CosmosStorageProvider("   ", "db", "container"));
     }
+
+    [Fact]
+    public async Task UpsertDocumentAsync_Passes_IfMatchEtag_When_ETag_Present()
+    {
+        var itemResponse = Substitute.For<ItemResponse<CosmosDocumentEnvelope<MockDoc>>>();
+        itemResponse.RequestCharge.Returns(7.25);
+
+        _mockContainer.UpsertItemAsync(
+            Arg.Any<CosmosDocumentEnvelope<MockDoc>>(),
+            Arg.Any<PartitionKey>(),
+            Arg.Is<ItemRequestOptions>(o => o.IfMatchEtag == "\"etag-123\""),
+            Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(itemResponse));
+
+        var envelope = new DocumentEnvelope<MockDoc>
+        {
+            Id = "d-etag",
+            PartitionKey = "pk-etag",
+            DocType = nameof(MockDoc),
+            ETag = "\"etag-123\"",
+            Data = new MockDoc("d-etag", "ETag Item")
+        };
+
+        await _provider.UpsertDocumentAsync(envelope, TestContext.Current.CancellationToken);
+
+        _provider.LastRequestCharge.ShouldBe(7.25);
+        _provider.CumulativeRequestCharge.ShouldBeGreaterThanOrEqualTo(7.25);
+
+        await _mockContainer.Received(1).UpsertItemAsync(
+            Arg.Any<CosmosDocumentEnvelope<MockDoc>>(),
+            Arg.Any<PartitionKey>(),
+            Arg.Is<ItemRequestOptions>(o => o.IfMatchEtag == "\"etag-123\""),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task UpsertDocumentAsync_Throws_AquilaConcurrencyException_On_PreconditionFailed()
+    {
+        _mockContainer.UpsertItemAsync(
+            Arg.Any<CosmosDocumentEnvelope<MockDoc>>(),
+            Arg.Any<PartitionKey>(),
+            Arg.Any<ItemRequestOptions>(),
+            Arg.Any<CancellationToken>())
+            .Returns<Task<ItemResponse<CosmosDocumentEnvelope<MockDoc>>>>(_ =>
+                throw new CosmosException("Precondition failed", HttpStatusCode.PreconditionFailed, 0, "act-1", 1.0));
+
+        var envelope = new DocumentEnvelope<MockDoc>
+        {
+            Id = "d-etag-fail",
+            PartitionKey = "pk-fail",
+            DocType = nameof(MockDoc),
+            ETag = "\"stale-etag\"",
+            Data = new MockDoc("d-etag-fail", "Stale Item")
+        };
+
+        await Should.ThrowAsync<AquilaConcurrencyException>(() =>
+            _provider.UpsertDocumentAsync(envelope, TestContext.Current.CancellationToken));
+    }
 }

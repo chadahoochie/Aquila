@@ -43,12 +43,13 @@ public interface IQuerySession : IDisposable, IAsyncDisposable
     TrackingMode TrackingMode { get; }
     IEventStore Events { get; }
     IIdentityMap IdentityMap { get; }
+    double LastRequestCharge { get; }
+    double CumulativeRequestCharge { get; }
 
     Task<T?> LoadAsync<T>(string id, string? partitionKey = null, CancellationToken ct = default) where T : class;
     Task<T?> LoadAsync<T>(Guid id, string? partitionKey = null, CancellationToken ct = default) where T : class;
     Task<IReadOnlyList<T>> LoadManyAsync<T>(IEnumerable<string> ids, CancellationToken ct = default) where T : class;
 
-    IQueryable<T> Query<T>() where T : class;
     Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, CancellationToken ct = default) where T : class;
     Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate, Expression<Func<DocumentEnvelope<T>, object?>> orderBy, SortOrder sortOrder = SortOrder.Ascending, CancellationToken ct = default) where T : class;
     Task<IReadOnlyList<T>> QueryAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate, IEnumerable<SortOrderDefinition<T>> orderings, CancellationToken ct = default) where T : class;

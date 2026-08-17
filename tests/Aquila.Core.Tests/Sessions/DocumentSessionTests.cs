@@ -285,18 +285,5 @@ public sealed class DocumentSessionTests
         ex.ExpectedVersion.ShouldBe("1");
         ex.ActualVersion.ShouldBe("2");
     }
-
-    [Theory, AutoNSubstituteData]
-    public void Query_Method_Throws_NotSupportedException(
-        IDocumentStorageProvider docStorage,
-        IEventStorageProvider eventStorage)
-    {
-        var options = new StoreOptions { DocumentStorage = docStorage, EventStorage = eventStorage };
-        using var session = new DocumentSession(docStorage, eventStorage, options);
-
-#pragma warning disable CS0618
-        Should.Throw<NotSupportedException>(() => session.Query<SampleDocument>());
-#pragma warning restore CS0618
-    }
 }
 

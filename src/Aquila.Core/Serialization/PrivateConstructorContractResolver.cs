@@ -60,6 +60,7 @@ public sealed class PrivateConstructorContractResolver : DefaultContractResolver
     {
         ContractResolver = new PrivateConstructorContractResolver(),
         NullValueHandling = NullValueHandling.Ignore,
-        Formatting = Formatting.None
+        Formatting = Formatting.None,
+        Converters = new List<JsonConverter> { new Newtonsoft.Json.Converters.StringEnumConverter() }
     };
 }

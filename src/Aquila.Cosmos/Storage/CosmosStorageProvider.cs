@@ -155,10 +155,8 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
         var props = new ContainerProperties(containerName, partitionKeyPath);
 
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/*" });
-        props.IndexingPolicy.ExcludedPaths.Add(new ExcludedPath { Path = "/data/*" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_docType/?" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_tenantId/?" });
-        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/data/GlobalSequence/?" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/pk/?" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/id/?" });
 
@@ -168,14 +166,11 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
             new CompositePath { Path = "/_tenantId", Order = CompositePathSortOrder.Ascending }
         });
 
-        props.IndexingPolicy.CompositeIndexes.Add(new Collection<CompositePath>
-        {
-            new CompositePath { Path = "/_docType", Order = CompositePathSortOrder.Ascending },
-            new CompositePath { Path = "/data/GlobalSequence", Order = CompositePathSortOrder.Ascending }
-        });
-
         return props;
     }
+
+    public double LastRequestCharge => Math.Max(_documents.LastRequestCharge, _events.LastRequestCharge);
+    public double CumulativeRequestCharge => _documents.CumulativeRequestCharge + _events.CumulativeRequestCharge;
 
     // --- IDocumentStorageProvider forwarding ---
 

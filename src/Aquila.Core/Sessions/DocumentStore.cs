@@ -17,6 +17,7 @@ public sealed class DocumentStore : IDocumentStore
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
+        Options.Freeze();
         if (Options.DocumentStorage != null)
         {
             await Options.DocumentStorage.InitializeAsync(ct);
