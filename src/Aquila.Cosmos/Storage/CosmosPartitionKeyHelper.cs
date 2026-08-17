@@ -11,17 +11,36 @@ public static class CosmosPartitionKeyHelper
             return PartitionKey.Null;
         }
 
-        if (partitionKey.Contains('|'))
+        int pipeIndex = partitionKey.IndexOf('|');
+        if (pipeIndex < 0)
         {
-            var parts = partitionKey.Split('|', StringSplitOptions.RemoveEmptyEntries);
-            var builder = new PartitionKeyBuilder();
-            foreach (var part in parts)
-            {
-                builder.Add(part);
-            }
-            return builder.Build();
+            return new PartitionKey(partitionKey);
         }
 
-        return new PartitionKey(partitionKey);
+        // Performance Optimization: Use ReadOnlySpan<char> slicing instead of string.Split('|')
+        // to build hierarchical partition keys without string[] array allocations.
+        var builder = new PartitionKeyBuilder();
+        var span = partitionKey.AsSpan();
+        while (!span.IsEmpty)
+        {
+            int idx = span.IndexOf('|');
+            if (idx == -1)
+            {
+                if (!span.IsEmpty)
+                {
+                    builder.Add(span.ToString());
+                }
+                break;
+            }
+
+            var segment = span.Slice(0, idx);
+            if (!segment.IsEmpty)
+            {
+                builder.Add(segment.ToString());
+            }
+            span = span.Slice(idx + 1);
+        }
+
+        return builder.Build();
     }
 }

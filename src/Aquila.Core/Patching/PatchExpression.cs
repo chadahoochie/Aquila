@@ -63,6 +63,11 @@ public class PatchExpression<T> : IPatchExpression<T>
         return this;
     }
 
+    // Performance Optimization: Cache resolved JSON pointer paths for direct properties (keyed by MemberInfo)
+    // and complex nested lambda expressions to eliminate per-operation AST traversal, Stack<string>, and string concatenation allocations.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<System.Reflection.MemberInfo, string> _simpleMemberCache = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _expressionPathCache = new();
+
     private static string BuildJsonPointerPath(LambdaExpression lambda)
     {
         var body = lambda.Body;
@@ -71,24 +76,34 @@ public class PatchExpression<T> : IPatchExpression<T>
             body = unary.Operand;
         }
 
-        var parts = new Stack<string>();
-        var current = body;
-
-        while (current is MemberExpression member)
+        // Fast-path: single direct property access (e.g. o => o.Status)
+        if (body is MemberExpression directMember && directMember.Expression is ParameterExpression)
         {
-            parts.Push(member.Member.Name);
-            current = member.Expression;
-            while (current is UnaryExpression u && u.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked)
+            return _simpleMemberCache.GetOrAdd(directMember.Member, static m => $"/Data/{m.Name}");
+        }
+
+        // Fallback with caching for nested property paths (e.g. o => o.ShippingAddress.City)
+        return _expressionPathCache.GetOrAdd(lambda.ToString(), _ =>
+        {
+            var parts = new Stack<string>();
+            var current = body;
+
+            while (current is MemberExpression member)
             {
-                current = u.Operand;
+                parts.Push(member.Member.Name);
+                current = member.Expression;
+                while (current is UnaryExpression u && u.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked)
+                {
+                    current = u.Operand;
+                }
             }
-        }
 
-        if (parts.Count == 0)
-        {
-            throw new ArgumentException("Expression must specify a property access (e.g. x => x.Property).", nameof(lambda));
-        }
+            if (parts.Count == 0)
+            {
+                throw new ArgumentException("Expression must specify a property access (e.g. x => x.Property).", nameof(lambda));
+            }
 
-        return "/Data/" + string.Join('/', parts);
+            return "/Data/" + string.Join('/', parts);
+        });
     }
 }

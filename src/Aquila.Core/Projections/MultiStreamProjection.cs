@@ -78,13 +78,21 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
                 Data = doc
             };
 
-            await session.DocumentStorage.UpsertDocumentAsync(envelope, ct);
-            session.IdentityMap.Track(docId, doc, envelope);
+            await session.DocumentStorage.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
+            // Performance Optimization: Bypass IdentityMap tracking overhead in lightweight projection sessions
+            if (session.TrackingMode != TrackingMode.Lightweight)
+            {
+                session.IdentityMap.Track(docId, doc, envelope);
+            }
         }
         else
         {
-            await session.DocumentStorage.DeleteDocumentAsync<TDoc>(docId, pk, ct);
-            session.IdentityMap.Untrack<TDoc>(docId);
+            await session.DocumentStorage.DeleteDocumentAsync<TDoc>(docId, pk, ct).ConfigureAwait(false);
+            // Performance Optimization: Bypass IdentityMap untracking overhead in lightweight projection sessions
+            if (session.TrackingMode != TrackingMode.Lightweight)
+            {
+                session.IdentityMap.Untrack<TDoc>(docId);
+            }
         }
     }
 }

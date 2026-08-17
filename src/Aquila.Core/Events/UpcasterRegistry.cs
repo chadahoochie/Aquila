@@ -6,6 +6,9 @@ namespace Aquila.Core.Events;
 public sealed class UpcasterRegistry
 {
     private readonly ConcurrentDictionary<Type, IEventUpcaster> _upcasters = new();
+    // Performance Optimization: Cache pre-composed upcaster pipeline delegates keyed by source payload type
+    // to eliminate repetitive dictionary lookups and loop dispatch overhead during chained upcasting (e.g. V1 -> V2 -> V3).
+    private readonly ConcurrentDictionary<Type, Func<object, (object FinalData, bool HasChanged)>> _pipelineCache = new();
     private static readonly ConcurrentDictionary<Type, Func<IEvent, object, IEvent>> _envelopeUpcastFactories = new();
 
     public bool IsEmpty => _upcasters.IsEmpty;
@@ -14,6 +17,8 @@ public sealed class UpcasterRegistry
     {
         ArgumentNullException.ThrowIfNull(upcaster);
         _upcasters[upcaster.SourceType] = upcaster;
+        // Invalidate cached composed pipelines on new upcaster registration
+        _pipelineCache.Clear();
     }
 
     public void Register<TUpcaster>() where TUpcaster : IEventUpcaster, new()
@@ -30,29 +35,72 @@ public sealed class UpcasterRegistry
 
         var currentData = @event.Data;
         var currentType = currentData.GetType();
-        bool hasChanged = false;
 
-        int maxIterations = 100;
-        int iteration = 0;
-
-        while (iteration < maxIterations && _upcasters.TryGetValue(currentType, out var upcaster))
-        {
-            currentData = upcaster.Upcast(currentData);
-            if (currentData == null)
-            {
-                throw new InvalidOperationException($"Upcaster '{upcaster.GetType().FullName}' returned null when upcasting source type '{currentType.FullName}'.");
-            }
-            currentType = currentData.GetType();
-            hasChanged = true;
-            iteration++;
-        }
+        // Retrieve or compile the linear upcast execution delegate for the event payload type
+        var pipeline = _pipelineCache.GetOrAdd(currentType, BuildPipeline);
+        var (finalData, hasChanged) = pipeline(currentData);
 
         if (!hasChanged)
         {
             return @event;
         }
 
-        return CreateUpcastEnvelope(@event, currentData);
+        return CreateUpcastEnvelope(@event, finalData);
+    }
+
+    /// <summary>
+    /// Traverses the type-migration graph and pre-assembles a single callable pipeline delegate for the source type.
+    /// </summary>
+    private Func<object, (object FinalData, bool HasChanged)> BuildPipeline(Type sourceType)
+    {
+        var steps = new List<IEventUpcaster>();
+        var curr = sourceType;
+        var visited = new HashSet<Type>();
+
+        // Follow the transformation chain from source type to the latest target type
+        while (curr != null && _upcasters.TryGetValue(curr, out var upcaster) && visited.Add(curr))
+        {
+            steps.Add(upcaster);
+            curr = upcaster.TargetType;
+        }
+
+        if (steps.Count == 0)
+        {
+            return static data => (data, false);
+        }
+
+        // Fast-path: single step migration without array allocation or loop overhead
+        if (steps.Count == 1)
+        {
+            var single = steps[0];
+            return data =>
+            {
+                var result = single.Upcast(data);
+                if (result == null)
+                {
+                    throw new InvalidOperationException($"Upcaster '{single.GetType().FullName}' returned null when upcasting source type '{data.GetType().FullName}'.");
+                }
+                return (result, true);
+            };
+        }
+
+        // Multi-step chained migration (e.g. V1 -> V2 -> V3) using pre-baked step array
+        var stepArray = steps.ToArray();
+        return data =>
+        {
+            var cur = data;
+            for (int i = 0; i < stepArray.Length; i++)
+            {
+                var u = stepArray[i];
+                var next = u.Upcast(cur);
+                if (next == null)
+                {
+                    throw new InvalidOperationException($"Upcaster '{u.GetType().FullName}' returned null when upcasting source type '{cur.GetType().FullName}'.");
+                }
+                cur = next;
+            }
+            return (cur, true);
+        };
     }
 
     private static IEvent CreateUpcastEnvelope(IEvent originalEvent, object newPayload)

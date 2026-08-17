@@ -36,13 +36,48 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
         return Task.FromResult<DocumentEnvelope<T>?>(null);
     }
 
-    public async Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(
+    // Performance Optimization: Cache compiled predicate and sort key selector delegates
+    // to eliminate repetitive Expression.Compile() overhead on high-frequency query executions.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<LambdaExpression, object> _compiledPredicateCache = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<LambdaExpression, object> _compiledKeySelectorCache = new();
+
+    private static Func<DocumentEnvelope<T>, bool> CompilePredicate<T>(Expression<Func<DocumentEnvelope<T>, bool>> predicate) where T : class
+    {
+        return (Func<DocumentEnvelope<T>, bool>)_compiledPredicateCache.GetOrAdd(predicate, static p => ((Expression<Func<DocumentEnvelope<T>, bool>>)p).Compile());
+    }
+
+    public Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(
         Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null,
         QueryOptions? options = null,
         CancellationToken ct = default) where T : class
     {
-        var result = await QueryPagedDocumentsAsync(predicate, options, ct).ConfigureAwait(false);
-        return result.Documents;
+        IEnumerable<DocumentEnvelope<T>> query = _documents.Values
+            .OfType<DocumentEnvelope<T>>()
+            .Where(env => !env.IsDeleted);
+
+        if (!string.IsNullOrEmpty(options?.PartitionKey))
+        {
+            query = query.Where(env => env.PartitionKey == options.PartitionKey);
+        }
+
+        if (predicate != null)
+        {
+            var compiled = CompilePredicate(predicate);
+            query = query.Where(compiled);
+        }
+
+        // Only sort if explicit orderings are supplied (avoid unrequested OrderBy on standard queries)
+        if (options?.Orderings != null && options.Orderings.Count > 0)
+        {
+            query = ApplyOrdering(query, options.Orderings);
+        }
+
+        if (options != null && options.MaxItemCount.HasValue && options.MaxItemCount.Value > 0)
+        {
+            query = query.Take(options.MaxItemCount.Value);
+        }
+
+        return Task.FromResult<IReadOnlyList<DocumentEnvelope<T>>>(query.ToList());
     }
 
     public Task<StorageQueryResult<T>> QueryPagedDocumentsAsync<T>(
@@ -61,11 +96,21 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
 
         if (predicate != null)
         {
-            var compiled = predicate.Compile();
+            var compiled = CompilePredicate(predicate);
             query = query.Where(compiled);
         }
 
-        var allItems = ApplyOrdering(query, options?.Orderings).ToList();
+        if (options?.Orderings != null && options.Orderings.Count > 0)
+        {
+            query = ApplyOrdering(query, options.Orderings);
+        }
+        else
+        {
+            // Default deterministic ordering by Id for pagination stability
+            query = query.OrderBy(env => env.Id, StringComparer.Ordinal);
+        }
+
+        var allItems = query.ToList();
         int totalCount = allItems.Count;
 
         // Offset-based pagination
@@ -112,7 +157,7 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
     {
         if (orderings == null || orderings.Count == 0)
         {
-            return query.OrderBy(env => env.Id, StringComparer.Ordinal);
+            return query;
         }
 
         IOrderedEnumerable<DocumentEnvelope<T>>? ordered = null;
@@ -138,37 +183,40 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
             }
         }
 
-        return ordered ?? query.OrderBy(env => env.Id, StringComparer.Ordinal);
+        return ordered ?? query;
     }
 
     private static Func<DocumentEnvelope<T>, object?> CompileKeySelector<T>(LambdaExpression expression)
     {
-        if (expression is Expression<Func<DocumentEnvelope<T>, object?>> typedExpr)
+        return (Func<DocumentEnvelope<T>, object?>)_compiledKeySelectorCache.GetOrAdd(expression, static expr =>
         {
-            return typedExpr.Compile();
-        }
+            if (expr is Expression<Func<DocumentEnvelope<T>, object?>> typedExpr)
+            {
+                return typedExpr.Compile();
+            }
 
-        var param = expression.Parameters[0];
-        if (param.Type == typeof(DocumentEnvelope<T>))
-        {
-            var body = expression.Body;
-            if (body.Type != typeof(object))
+            var param = expr.Parameters[0];
+            if (param.Type == typeof(DocumentEnvelope<T>))
             {
-                body = Expression.Convert(body, typeof(object));
+                var body = expr.Body;
+                if (body.Type != typeof(object))
+                {
+                    body = Expression.Convert(body, typeof(object));
+                }
+                return Expression.Lambda<Func<DocumentEnvelope<T>, object?>>(body, param).Compile();
             }
-            return Expression.Lambda<Func<DocumentEnvelope<T>, object?>>(body, param).Compile();
-        }
-        else
-        {
-            var newParam = Expression.Parameter(typeof(DocumentEnvelope<T>), "env");
-            var visitor = new ParameterReplaceVisitor(param, newParam);
-            var rewrittenBody = visitor.Visit(expression.Body);
-            if (rewrittenBody.Type != typeof(object))
+            else
             {
-                rewrittenBody = Expression.Convert(rewrittenBody, typeof(object));
+                var newParam = Expression.Parameter(typeof(DocumentEnvelope<T>), "env");
+                var visitor = new ParameterReplaceVisitor(param, newParam);
+                var rewrittenBody = visitor.Visit(expr.Body);
+                if (rewrittenBody.Type != typeof(object))
+                {
+                    rewrittenBody = Expression.Convert(rewrittenBody, typeof(object));
+                }
+                return Expression.Lambda<Func<DocumentEnvelope<T>, object?>>(rewrittenBody, newParam).Compile();
             }
-            return Expression.Lambda<Func<DocumentEnvelope<T>, object?>>(rewrittenBody, newParam).Compile();
-        }
+        });
     }
 
     private sealed class ParameterReplaceVisitor : ExpressionVisitor
