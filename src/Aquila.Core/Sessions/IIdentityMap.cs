@@ -26,9 +26,9 @@ public interface IIdentityMap
 
 public sealed class IdentityMap : IIdentityMap
 {
-    private readonly ConcurrentDictionary<(Type Type, string Id), TrackedItem> _map = new();
-
-    private sealed record TrackedItem(string Id, Type EntityType, object Entity, object Envelope, byte[]? Snapshot);
+    // Performance Optimization: Store TrackedEntity directly in the map to eliminate
+    // intermediate wrapper records and per-save Linq Select() projection allocations.
+    private readonly ConcurrentDictionary<(Type Type, string Id), TrackedEntity> _map = new();
 
     public bool TryGet<T>(string id, out T? entity) where T : class
     {
@@ -61,7 +61,7 @@ public sealed class IdentityMap : IIdentityMap
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        _map[(typeof(T), id)] = new TrackedItem(id, typeof(T), entity, envelope, snapshot);
+        _map[(typeof(T), id)] = new TrackedEntity(id, typeof(T), entity, envelope, snapshot);
     }
 
     public void Untrack<T>(string id) where T : class
@@ -84,9 +84,13 @@ public sealed class IdentityMap : IIdentityMap
 
     public IReadOnlyList<TrackedEntity> GetTrackedEntities()
     {
-        return _map.Values
-            .Select(x => new TrackedEntity(x.Id, x.EntityType, x.Entity, x.Envelope, x.Snapshot))
-            .ToList();
+        if (_map.IsEmpty)
+        {
+            return Array.Empty<TrackedEntity>();
+        }
+
+        // Fast-path: Convert dictionary values directly to an array without Linq Select projection
+        return _map.Values.ToArray();
     }
 
     public void UpdateSnapshot(Type entityType, string id, byte[] snapshot)

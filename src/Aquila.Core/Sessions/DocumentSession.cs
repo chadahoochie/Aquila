@@ -40,8 +40,9 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
 
         var docType = typeof(T).Name;
 
-        // Snapshot document state upon Store<T>() to isolate from post-store object mutations
-        var snapshot = SnapshotDocument(document);
+        // Performance Optimization: Clone document to isolate from external mutations and reuse the generated
+        // UTF-8 byte snapshot for DirtyTracking, eliminating a duplicate serialization pass on Track().
+        var (snapshot, snapshotBytes) = CloneAndSnapshotDocument(document);
         var existingEnvelope = InnerIdentityMap.GetEnvelope<T>(id);
 
         var envelope = new DocumentEnvelope<T>
@@ -67,7 +68,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
 
         if (TrackingMode != TrackingMode.Lightweight)
         {
-            bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
+            byte[]? recordSnapshot = TrackingMode == TrackingMode.DirtyTracking ? snapshotBytes : null;
             InnerIdentityMap.Track(id, document, envelope, recordSnapshot);
         }
     }
@@ -414,10 +415,15 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
         }
     }
 
+    // Performance Optimization: Cache generic MethodInfo per entity type to eliminate reflection lookup
+    // overhead during dirty entity change detection on SaveChangesAsync.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo> _createEnvelopeMethodCache = new();
+
     private (string PartitionKey, object EnvelopeObject) CreateEnvelopeForEntity(TrackedEntity tracked)
     {
-        var method = typeof(DocumentSession).GetMethod(nameof(CreateEnvelopeGeneric), BindingFlags.NonPublic | BindingFlags.Instance)!
-            .MakeGenericMethod(tracked.EntityType);
+        var method = _createEnvelopeMethodCache.GetOrAdd(tracked.EntityType, static entityType =>
+            typeof(DocumentSession).GetMethod(nameof(CreateEnvelopeGeneric), BindingFlags.NonPublic | BindingFlags.Instance)!
+                .MakeGenericMethod(entityType));
 
         return ((string, object))method.Invoke(this, new[] { tracked.Id, tracked.Entity, tracked.Envelope })!;
     }

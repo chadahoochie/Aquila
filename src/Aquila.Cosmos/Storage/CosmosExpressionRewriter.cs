@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using System.Reflection;
 using Aquila.Core.Storage;
 
 namespace Aquila.Cosmos.Storage;
@@ -9,6 +11,11 @@ namespace Aquila.Cosmos.Storage;
 /// </summary>
 public class CosmosExpressionRewriter : ExpressionVisitor
 {
+    // Performance Optimization: Cache property lookups and rewritten expression trees to avoid
+    // reflection GetProperty() overhead and AST allocations on high-frequency Cosmos query translations.
+    private static readonly ConcurrentDictionary<(Type Type, string Name), PropertyInfo?> _propertyCache = new();
+    private static readonly ConcurrentDictionary<LambdaExpression, LambdaExpression> _rewriteCache = new();
+
     private readonly ParameterExpression _oldParam;
     private readonly ParameterExpression _newParam;
 
@@ -22,36 +29,42 @@ public class CosmosExpressionRewriter : ExpressionVisitor
     {
         if (predicate == null) return null;
 
-        if (predicate.Parameters.Count == 0)
+        return (Expression<Func<CosmosDocumentEnvelope<T>, bool>>)_rewriteCache.GetOrAdd(predicate, static p =>
         {
-            throw new ArgumentException("Predicate must have at least one parameter.", nameof(predicate));
-        }
+            if (p.Parameters.Count == 0)
+            {
+                throw new ArgumentException("Predicate must have at least one parameter.", nameof(p));
+            }
 
-        var oldParam = predicate.Parameters[0];
-        var newParam = Expression.Parameter(typeof(CosmosDocumentEnvelope<T>), oldParam.Name);
+            var oldParam = p.Parameters[0];
+            var newParam = Expression.Parameter(typeof(CosmosDocumentEnvelope<T>), oldParam.Name);
 
-        var rewriter = new CosmosExpressionRewriter(oldParam, newParam);
-        var newBody = rewriter.Visit(predicate.Body);
+            var rewriter = new CosmosExpressionRewriter(oldParam, newParam);
+            var newBody = rewriter.Visit(p.Body);
 
-        return Expression.Lambda<Func<CosmosDocumentEnvelope<T>, bool>>(newBody, newParam);
+            return Expression.Lambda<Func<CosmosDocumentEnvelope<T>, bool>>(newBody, newParam);
+        });
     }
 
     public static LambdaExpression? Rewrite<T>(LambdaExpression? lambda) where T : class
     {
         if (lambda == null) return null;
 
-        if (lambda.Parameters.Count == 0)
+        return _rewriteCache.GetOrAdd(lambda, static l =>
         {
-            throw new ArgumentException("Expression must have at least one parameter.", nameof(lambda));
-        }
+            if (l.Parameters.Count == 0)
+            {
+                throw new ArgumentException("Expression must have at least one parameter.", nameof(l));
+            }
 
-        var oldParam = lambda.Parameters[0];
-        var newParam = Expression.Parameter(typeof(CosmosDocumentEnvelope<T>), oldParam.Name);
+            var oldParam = l.Parameters[0];
+            var newParam = Expression.Parameter(typeof(CosmosDocumentEnvelope<T>), oldParam.Name);
 
-        var rewriter = new CosmosExpressionRewriter(oldParam, newParam);
-        var newBody = rewriter.Visit(lambda.Body);
+            var rewriter = new CosmosExpressionRewriter(oldParam, newParam);
+            var newBody = rewriter.Visit(l.Body);
 
-        return Expression.Lambda(newBody, newParam);
+            return Expression.Lambda(newBody, newParam);
+        });
     }
 
     protected override Expression VisitParameter(ParameterExpression node)
@@ -69,7 +82,7 @@ public class CosmosExpressionRewriter : ExpressionVisitor
         {
             var visitedExpr = Visit(node.Expression);
             var memberName = node.Member.Name;
-            var targetProp = visitedExpr.Type.GetProperty(memberName);
+            var targetProp = _propertyCache.GetOrAdd((visitedExpr.Type, memberName), static key => key.Type.GetProperty(key.Name));
 
             if (targetProp != null)
             {

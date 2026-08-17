@@ -477,13 +477,14 @@ public abstract class QuerySessionBase : IQuerySession
         if (envelope == null || envelope.IsDeleted) return null;
         if (envelope.TenantId != TenantId) return null;
 
-        var loadedData = SnapshotDocument(envelope.Data);
-
-        if (TrackingMode != TrackingMode.Lightweight)
+        if (TrackingMode == TrackingMode.Lightweight)
         {
-            bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
-            InnerIdentityMap.Track(id, loadedData, envelope, recordSnapshot);
+            return SnapshotDocument(envelope.Data);
         }
+
+        var (loadedData, snapshotBytes) = CloneAndSnapshotDocument(envelope.Data);
+        byte[]? snapshot = TrackingMode == TrackingMode.DirtyTracking ? snapshotBytes : null;
+        InnerIdentityMap.Track(id, loadedData, envelope, snapshot);
         return loadedData;
     }
 
@@ -529,13 +530,17 @@ public abstract class QuerySessionBase : IQuerySession
 
             foreach (var envelope in envelopes)
             {
-                var loadedData = SnapshotDocument(envelope.Data);
-                if (TrackingMode != TrackingMode.Lightweight)
+                if (TrackingMode == TrackingMode.Lightweight)
                 {
-                    bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
-                    InnerIdentityMap.Track(envelope.Id, loadedData, envelope, recordSnapshot);
+                    results.Add(SnapshotDocument(envelope.Data));
                 }
-                results.Add(loadedData);
+                else
+                {
+                    var (loadedData, snapshotBytes) = CloneAndSnapshotDocument(envelope.Data);
+                    byte[]? snapshot = TrackingMode == TrackingMode.DirtyTracking ? snapshotBytes : null;
+                    InnerIdentityMap.Track(envelope.Id, loadedData, envelope, snapshot);
+                    results.Add(loadedData);
+                }
             }
         }
 
@@ -591,18 +596,19 @@ public abstract class QuerySessionBase : IQuerySession
         var results = new List<T>();
         foreach (var envelope in envelopes)
         {
-            if (TrackingMode != TrackingMode.Lightweight && InnerIdentityMap.TryGet<T>(envelope.Id, out var cached))
+            if (TrackingMode == TrackingMode.Lightweight)
+            {
+                results.Add(SnapshotDocument(envelope.Data));
+            }
+            else if (InnerIdentityMap.TryGet<T>(envelope.Id, out var cached))
             {
                 results.Add(cached!);
             }
             else
             {
-                var loadedData = SnapshotDocument(envelope.Data);
-                if (TrackingMode != TrackingMode.Lightweight)
-                {
-                    bool recordSnapshot = TrackingMode == TrackingMode.DirtyTracking;
-                    InnerIdentityMap.Track(envelope.Id, loadedData, envelope, recordSnapshot);
-                }
+                var (loadedData, snapshotBytes) = CloneAndSnapshotDocument(envelope.Data);
+                byte[]? snapshot = TrackingMode == TrackingMode.DirtyTracking ? snapshotBytes : null;
+                InnerIdentityMap.Track(envelope.Id, loadedData, envelope, snapshot);
                 results.Add(loadedData);
             }
         }
@@ -610,23 +616,30 @@ public abstract class QuerySessionBase : IQuerySession
         return results;
     }
 
+    // Performance Optimization: Cache combined tenant-filtered LINQ expression lambdas per (Type, TenantId, Predicate)
+    // to avoid allocating ParameterExpression, BinaryExpression, ParameterReplaceVisitor, and LambdaExpression trees per query.
+    private static readonly ConcurrentDictionary<(Type DocType, string? TenantId, object? Predicate), object> _tenantPredicateCache = new();
+
     private Expression<Func<DocumentEnvelope<T>, bool>> CombineWithTenantId<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate)
     {
-        var param = Expression.Parameter(typeof(DocumentEnvelope<T>), "x");
-        var tenantCheck = Expression.Equal(
-            Expression.Property(param, nameof(DocumentEnvelope<T>.TenantId)),
-            Expression.Constant(TenantId));
-
-        if (predicate == null)
+        return (Expression<Func<DocumentEnvelope<T>, bool>>)_tenantPredicateCache.GetOrAdd((typeof(T), TenantId, predicate), _ =>
         {
-            return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(tenantCheck, param);
-        }
+            var param = Expression.Parameter(typeof(DocumentEnvelope<T>), "x");
+            var tenantCheck = Expression.Equal(
+                Expression.Property(param, nameof(DocumentEnvelope<T>.TenantId)),
+                Expression.Constant(TenantId));
 
-        var visitor = new ParameterReplaceVisitor(predicate.Parameters[0], param);
-        var rewrittenBody = visitor.Visit(predicate.Body);
+            if (predicate == null)
+            {
+                return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(tenantCheck, param);
+            }
 
-        var combined = Expression.AndAlso(tenantCheck, rewrittenBody);
-        return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(combined, param);
+            var visitor = new ParameterReplaceVisitor(predicate.Parameters[0], param);
+            var rewrittenBody = visitor.Visit(predicate.Body);
+
+            var combined = Expression.AndAlso(tenantCheck, rewrittenBody);
+            return Expression.Lambda<Func<DocumentEnvelope<T>, bool>>(combined, param);
+        });
     }
 
     private sealed class ParameterReplaceVisitor : ExpressionVisitor
@@ -1024,12 +1037,25 @@ public abstract class QuerySessionBase : IQuerySession
         return doc;
     }
 
+    // Performance Optimization: Use UTF-8 byte serialization directly instead of UTF-16 JSON strings
+    // to reduce memory allocations and eliminate intermediate string object creation.
     protected static T SnapshotDocument<T>(T document) where T : class
     {
         ArgumentNullException.ThrowIfNull(document);
         var type = document.GetType();
-        var json = System.Text.Json.JsonSerializer.Serialize(document, type);
-        return (T)System.Text.Json.JsonSerializer.Deserialize(json, type)!;
+        var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(document, type);
+        return (T)System.Text.Json.JsonSerializer.Deserialize(bytes, type)!;
+    }
+
+    // Performance Optimization: Produce a fresh cloned entity and its UTF-8 snapshot bytes in a single pass,
+    // allowing the DirtyTracking pipeline to reuse the serialized bytes without re-serializing.
+    protected static (T ClonedData, byte[] SnapshotBytes) CloneAndSnapshotDocument<T>(T document) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var type = document.GetType();
+        var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(document, type);
+        var clone = (T)System.Text.Json.JsonSerializer.Deserialize(bytes, type)!;
+        return (clone, bytes);
     }
 
     public void Clear()

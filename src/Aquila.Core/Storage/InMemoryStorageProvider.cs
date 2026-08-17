@@ -19,15 +19,6 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
         _events = new InMemoryEventStorageProvider();
     }
 
-    public InMemoryStorageProvider(InMemoryDocumentStorageProvider documents, InMemoryEventStorageProvider events)
-    {
-        _documents = documents ?? throw new ArgumentNullException(nameof(documents));
-        _events = events ?? throw new ArgumentNullException(nameof(events));
-    }
-
-    public InMemoryDocumentStorageProvider Documents => _documents;
-    public InMemoryEventStorageProvider Events => _events;
-
     public string ProviderName => "InMemory";
     public double LastRequestCharge => 0.0;
     public double CumulativeRequestCharge => 0.0;
