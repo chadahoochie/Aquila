@@ -43,6 +43,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
         // Performance Optimization: Clone document to isolate from external mutations and reuse the generated
         // UTF-8 byte snapshot for DirtyTracking, eliminating a duplicate serialization pass on Track().
         var (snapshot, snapshotBytes) = CloneAndSnapshotDocument(document);
+        var existingEnvelope = InnerIdentityMap.GetEnvelope<T>(id);
 
         var envelope = new DocumentEnvelope<T>
         {
