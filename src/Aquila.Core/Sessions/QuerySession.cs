@@ -411,9 +411,7 @@ public abstract class QuerySessionBase : IQuerySession
 
     private Dictionary<string, object>? _headers;
     public IReadOnlyDictionary<string, object> Headers =>
-        _headers != null
-            ? new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(_headers)
-            : System.Collections.ObjectModel.ReadOnlyDictionary<string, object>.Empty;
+        _headers ?? (IReadOnlyDictionary<string, object>)System.Collections.ObjectModel.ReadOnlyDictionary<string, object>.Empty;
 
     public void SetHeader(string key, object value)
     {

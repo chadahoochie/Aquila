@@ -14,7 +14,7 @@ namespace Aquila.Core.Projections.Daemon;
 /// <summary>
 /// Background hosted service that polls global event sequence and dispatches event batches to registered async projections.
 /// </summary>
-public class ProjectionDaemon : BackgroundService, IProjectionDaemon
+public sealed class ProjectionDaemon : BackgroundService, IProjectionDaemon
 {
     private readonly IDocumentStore _documentStore;
     private readonly IProjectionCheckpointStore _checkpointStore;
