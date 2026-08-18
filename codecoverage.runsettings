@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<RunSettings>
+  <!-- General Run Configuration -->
+  <RunConfiguration>
+    <MaxCpuCount>0</MaxCpuCount>
+    <ResultsDirectory>./TestResults</ResultsDirectory>
+  </RunConfiguration>
+
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <!-- Coverlet Data Collector for XPlat Code Coverage (cross-platform CLI & CI) -->
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <!-- Formats: Cobertura for CI/CD reports & OpenCover for CRAP score complexity analysis -->
+          <Format>cobertura,opencover</Format>
+
+          <!-- Include only production Aquila libraries -->
+          <Include>[Aquila.Core]*,[Aquila.Cosmos]*,[Aquila.Redis]*</Include>
+
+          <!-- Exclude test assemblies, benchmark assemblies, sample assemblies, and test projection classes -->
+          <Exclude>[*.Tests]*,[*.Tests.*]*,[*.Test]*,[*.Benchmarks]*,[*.Samples]*,[Aquila.*Tests]*</Exclude>
+
+          <!-- Exclude by attributes: generated code, obsolete code, compiler generated, and explicit opt-outs -->
+          <ExcludeByAttribute>Obsolete,GeneratedCodeAttribute,CompilerGeneratedAttribute,ExcludeFromCodeCoverageAttribute,ExcludeFromCodeCoverage</ExcludeByAttribute>
+
+          <!-- Exclude source-generated files, build output, test projections, and test source trees -->
+          <ExcludeByFile>**/obj/**/*,**/*.g.cs,**/*.designer.cs,**/tests/**/*,**/tests/**/Projections/**/*,**/*ProjectionTests*.cs,**/benchmarks/**/*,**/samples/**/*</ExcludeByFile>
+
+          <!-- Explicitly ensure test assemblies are excluded from coverage collection -->
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+
+          <!-- Optimization & precision settings -->
+          <SingleHit>false</SingleHit>
+          <UseSourceLink>true</UseSourceLink>
+          <SkipAutoProps>true</SkipAutoProps>
+        </Configuration>
+      </DataCollector>
+
+      <!-- Microsoft Visual Studio / dotnet-coverage Collector -->
+      <DataCollector friendlyName="Code Coverage">
+        <Configuration>
+          <CodeCoverage>
+            <ModulePaths>
+              <Include>
+                <ModulePath>.*Aquila\.(Core|Cosmos|Redis)\.dll$</ModulePath>
+              </Include>
+              <Exclude>
+                <ModulePath>.*Tests\.dll$</ModulePath>
+                <ModulePath>.*Benchmarks\.dll$</ModulePath>
+                <ModulePath>.*Samples\.dll$</ModulePath>
+              </Exclude>
+            </ModulePaths>
+            <Functions>
+              <Exclude>
+                <Function>.*Tests\..*</Function>
+                <Function>.*Test.*Projection.*</Function>
+                <Function>.*Projection.*Test.*</Function>
+              </Exclude>
+            </Functions>
+            <Attributes>
+              <Exclude>
+                <Attribute>^System\.Diagnostics\.CodeAnalysis\.ExcludeFromCodeCoverageAttribute$</Attribute>
+                <Attribute>^System\.CodeDom\.Compiler\.GeneratedCodeAttribute$</Attribute>
+                <Attribute>^System\.Runtime\.CompilerServices\.CompilerGeneratedAttribute$</Attribute>
+                <Attribute>^System\.ObsoleteAttribute$</Attribute>
+              </Exclude>
+            </Attributes>
+            <Sources>
+              <Exclude>
+                <Source>.*[/\\]tests[/\\].*</Source>
+                <Source>.*[/\\]benchmarks[/\\].*</Source>
+                <Source>.*[/\\]samples[/\\].*</Source>
+                <Source>.*[/\\]obj[/\\].*</Source>
+                <Source>.*\.(g|designer)\.cs$</Source>
+              </Exclude>
+            </Sources>
+            <UseVerifiableInstrumentation>True</UseVerifiableInstrumentation>
+            <AllowLowIntegrityProcesses>True</AllowLowIntegrityProcesses>
+            <CollectFromChildProcesses>True</CollectFromChildProcesses>
+            <CollectAspDotNet>False</CollectAspDotNet>
+          </CodeCoverage>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

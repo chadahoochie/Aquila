@@ -82,6 +82,75 @@ public static class ServiceCollectionExtensions
         return options;
     }
 
+    public static StoreOptions UseCosmosDocuments(this StoreOptions options, Microsoft.Azure.Cosmos.CosmosClient client, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+
+        var cosmosOptions = new Aquila.Cosmos.Configuration.CosmosStorageOptions();
+        configure?.Invoke(cosmosOptions);
+
+        var resolver = new CosmosContainerResolver(client, cosmosOptions, options);
+        var provider = new CosmosDocumentStorageProvider(type => resolver.GetContainerForDocumentType(type));
+        options.DocumentStorage = provider;
+        return options;
+    }
+
+    public static StoreOptions UseCosmosDocuments(this StoreOptions options, string connectionString, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
+        var client = new Microsoft.Azure.Cosmos.CosmosClient(connectionString, CosmosStorageProvider.CreateDefaultClientOptions());
+        return options.UseCosmosDocuments(client, configure);
+    }
+
+    public static StoreOptions UseCosmosEvents(this StoreOptions options, Microsoft.Azure.Cosmos.CosmosClient client, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+
+        var cosmosOptions = new Aquila.Cosmos.Configuration.CosmosStorageOptions();
+        configure?.Invoke(cosmosOptions);
+
+        var resolver = new CosmosContainerResolver(client, cosmosOptions, options);
+        var provider = new CosmosEventStorageProvider(() => resolver.GetEventsContainer(), () => resolver.GetSnapshotsContainer());
+        options.EventStorage = provider;
+        return options;
+    }
+
+    public static StoreOptions UseCosmosEvents(this StoreOptions options, string connectionString, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
+        var client = new Microsoft.Azure.Cosmos.CosmosClient(connectionString, CosmosStorageProvider.CreateDefaultClientOptions());
+        return options.UseCosmosEvents(client, configure);
+    }
+
+    public static StoreOptions UseCosmosProjections(this StoreOptions options, Microsoft.Azure.Cosmos.CosmosClient client, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+
+        var cosmosOptions = new Aquila.Cosmos.Configuration.CosmosStorageOptions();
+        configure?.Invoke(cosmosOptions);
+
+        var resolver = new CosmosContainerResolver(client, cosmosOptions, options);
+        var provider = new CosmosProjectionStorageProvider(type => resolver.GetContainerForDocumentType(type));
+        options.ProjectionStorage = provider;
+        return options;
+    }
+
+    public static StoreOptions UseCosmosProjections(this StoreOptions options, string connectionString, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
+        var client = new Microsoft.Azure.Cosmos.CosmosClient(connectionString, CosmosStorageProvider.CreateDefaultClientOptions());
+        return options.UseCosmosProjections(client, configure);
+    }
+
     public static IServiceCollection AddAquila(this IServiceCollection services, Action<StoreOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);

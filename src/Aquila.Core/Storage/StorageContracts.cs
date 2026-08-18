@@ -61,6 +61,7 @@ public sealed class StorageOperation
     public string DocType { get; set; } = string.Empty;
     public object Document { get; set; } = default!;
     public List<PatchOperationData> PatchOperations { get; set; } = new();
+    public Type? ModelType { get; set; }
 }
 
 /// <summary>
@@ -143,6 +144,18 @@ public interface IDocumentStorageProvider : IDisposable, IAsyncDisposable
     Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class;
     Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class;
     Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Provider interface for underlying projection read-model persistence.
+/// Extends <see cref="IDocumentStorageProvider"/> with projection-lifecycle operations.
+/// </summary>
+public interface IProjectionStorageProvider : IDocumentStorageProvider
+{
+    /// <summary>
+    /// Purges all materialized read-model documents for the specified projection, enabling instantaneous rebuilds.
+    /// </summary>
+    Task PurgeProjectionAsync(string projectionName, Type readModelType, CancellationToken ct = default);
 }
 
 /// <summary>

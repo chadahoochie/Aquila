@@ -5,10 +5,10 @@ using Aquila.Core.Queries;
 namespace Aquila.Core.Storage;
 
 /// <summary>
-/// Composite in-memory storage provider implementing both IDocumentStorageProvider and IEventStorageProvider.
+/// Composite in-memory storage provider implementing IDocumentStorageProvider, IEventStorageProvider, and IProjectionStorageProvider.
 /// Delegates to dedicated InMemoryDocumentStorageProvider and InMemoryEventStorageProvider instances.
 /// </summary>
-public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventStorageProvider
+public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventStorageProvider, IProjectionStorageProvider
 {
     private readonly InMemoryDocumentStorageProvider _documents;
     private readonly InMemoryEventStorageProvider _events;
@@ -54,6 +54,14 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
 
     public Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default) =>
         _documents.ExecuteBatchAsync(operations, ct);
+
+    // --- IProjectionStorageProvider Delegation ---
+
+    public Task PurgeProjectionAsync(string projectionName, Type readModelType, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(readModelType);
+        return _documents.PurgeDocumentsByTypeAsync(readModelType, ct);
+    }
 
     // --- IEventStorageProvider Delegation ---
 

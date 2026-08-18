@@ -136,44 +136,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     private async Task ClearProjectionDocumentsAsync(IProjection proj, CancellationToken ct)
     {
         var docType = proj is IMultiStreamProjection multiProj ? multiProj.ReadModelType : proj.AggregateType;
-
-        var queryMethod = typeof(IDocumentStorageProvider)
-            .GetMethod(nameof(IDocumentStorageProvider.QueryDocumentsAsync))!
-            .MakeGenericMethod(docType);
-
-        var envelopeType = typeof(DocumentEnvelope<>).MakeGenericType(docType);
-        var param = System.Linq.Expressions.Expression.Parameter(envelopeType, "env");
-        var lambda = System.Linq.Expressions.Expression.Lambda(System.Linq.Expressions.Expression.Constant(true), param);
-
-        var queryTask = (Task)queryMethod.Invoke(_documentStore.Options.DocumentStorage, new object?[] { lambda, null, ct })!;
-        await queryTask.ConfigureAwait(false);
-
-        var resultProperty = queryTask.GetType().GetProperty("Result")!;
-        var envelopes = (System.Collections.IEnumerable)resultProperty.GetValue(queryTask)!;
-
-        var envelopeList = envelopes.Cast<object>().ToList();
-        if (envelopeList.Count == 0) return;
-
-        var deleteMethod = typeof(IDocumentStorageProvider)
-            .GetMethod(nameof(IDocumentStorageProvider.DeleteDocumentAsync))!
-            .MakeGenericMethod(docType);
-
-        var parallelOptions = new ParallelOptions
-        {
-            MaxDegreeOfParallelism = Math.Max(1, _options.MaxEventGroupConcurrency),
-            CancellationToken = ct
-        };
-
-        await Parallel.ForEachAsync(envelopeList, parallelOptions, async (envelope, token) =>
-        {
-            var idProp = envelope.GetType().GetProperty("Id")!;
-            var pkProp = envelope.GetType().GetProperty("PartitionKey")!;
-            string id = (string)idProp.GetValue(envelope)!;
-            string pk = (string)pkProp.GetValue(envelope)!;
-
-            var deleteTask = (Task)deleteMethod.Invoke(_documentStore.Options.DocumentStorage, new object[] { id, pk, token })!;
-            await deleteTask.ConfigureAwait(false);
-        }).ConfigureAwait(false);
+        await _documentStore.Options.ProjectionStorage.PurgeProjectionAsync(proj.Name, docType, ct).ConfigureAwait(false);
     }
 
     public async Task CatchUpAsync(CancellationToken ct = default)

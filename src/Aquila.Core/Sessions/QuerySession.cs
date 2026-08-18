@@ -394,6 +394,7 @@ public abstract class QuerySessionBase : IQuerySession
 {
     public IDocumentStorageProvider DocumentStorage { get; }
     public IEventStorageProvider EventStorage { get; }
+    public IProjectionStorageProvider ProjectionStorage => Options.ProjectionStorage;
     protected readonly StoreOptions Options;
     protected readonly CoreEventStore EventStore;
     protected readonly IIdentityMap InnerIdentityMap;
@@ -403,8 +404,16 @@ public abstract class QuerySessionBase : IQuerySession
     public IIdentityMap IdentityMap => InnerIdentityMap;
     internal StoreOptions StoreOptions => Options;
 
-    public double LastRequestCharge => Math.Max(DocumentStorage.LastRequestCharge, EventStorage.LastRequestCharge);
-    public double CumulativeRequestCharge => DocumentStorage.CumulativeRequestCharge + EventStorage.CumulativeRequestCharge;
+    public double LastRequestCharge => Math.Max(DocumentStorage.LastRequestCharge, Math.Max(EventStorage.LastRequestCharge, ProjectionStorage.LastRequestCharge));
+    public double CumulativeRequestCharge => DocumentStorage.CumulativeRequestCharge + EventStorage.CumulativeRequestCharge + ProjectionStorage.CumulativeRequestCharge;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected IDocumentStorageProvider GetStorageForType<T>() =>
+        Options.IsProjectionReadModel(typeof(T)) ? Options.ProjectionStorage : Options.DocumentStorage;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected IDocumentStorageProvider GetStorageForType(Type type) =>
+        Options.IsProjectionReadModel(type) ? Options.ProjectionStorage : Options.DocumentStorage;
 
     public string? CorrelationId { get; set; }
     public string? CausationId { get; set; }
@@ -471,7 +480,7 @@ public abstract class QuerySessionBase : IQuerySession
         }
 
         var pk = partitionKey ?? typeof(T).Name;
-        var envelope = await DocumentStorage.ReadDocumentAsync<T>(id, pk, ct);
+        var envelope = await GetStorageForType<T>().ReadDocumentAsync<T>(id, pk, ct);
         if (envelope == null || envelope.IsDeleted) return null;
         if (envelope.TenantId != TenantId) return null;
 
@@ -521,7 +530,7 @@ public abstract class QuerySessionBase : IQuerySession
         {
             var idSet = missingIds.ToHashSet();
 
-            var envelopes = await DocumentStorage.QueryDocumentsAsync<T>(
+            var envelopes = await GetStorageForType<T>().QueryDocumentsAsync<T>(
                 x => x.TenantId == TenantId && idSet.Contains(x.Id),
                 null,
                 ct);
@@ -585,7 +594,7 @@ public abstract class QuerySessionBase : IQuerySession
         CancellationToken ct = default) where T : class
     {
         var fullPredicate = CombineWithTenantId(predicate);
-        var envelopes = await DocumentStorage.QueryDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
+        var envelopes = await GetStorageForType<T>().QueryDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
         return TrackAndUnwrap(envelopes);
     }
 
@@ -745,7 +754,7 @@ public abstract class QuerySessionBase : IQuerySession
         ArgumentNullException.ThrowIfNull(options);
 
         var fullPredicate = CombineWithTenantId(predicate);
-        var result = await DocumentStorage.QueryPagedDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
+        var result = await GetStorageForType<T>().QueryPagedDocumentsAsync(fullPredicate, options, ct).ConfigureAwait(false);
         var unwrappedItems = TrackAndUnwrap(result.Documents);
 
         int pageSize = options.MaxItemCount ?? unwrappedItems.Count;

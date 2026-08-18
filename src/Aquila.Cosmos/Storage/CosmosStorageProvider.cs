@@ -8,7 +8,7 @@ using Aquila.Cosmos.Configuration;
 
 namespace Aquila.Cosmos.Storage;
 
-public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStorageProvider
+public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStorageProvider, IProjectionStorageProvider
 {
     private readonly CosmosClient _client;
     private readonly CosmosContainerResolver _resolver;
@@ -191,6 +191,11 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
 
     public Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default) =>
         _documents.ExecuteBatchAsync(operations, ct);
+
+    // --- IProjectionStorageProvider forwarding ---
+
+    public Task PurgeProjectionAsync(string projectionName, Type readModelType, CancellationToken ct = default) =>
+        _documents.PurgeDocumentsByTypeAsync(readModelType, ct);
 
     // --- IEventStorageProvider forwarding ---
 

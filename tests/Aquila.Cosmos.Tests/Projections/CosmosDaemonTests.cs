@@ -371,6 +371,32 @@ public sealed class CosmosDaemonTests
     }
 
     [Fact]
+    public void AddCosmosDaemon_With_ConfigureOptions_Registers_DaemonOptions()
+    {
+        var services = new ServiceCollection();
+        var options = new StoreOptions();
+        services.AddSingleton(options);
+        services.AddSingleton<IDocumentStore>(new DocumentStore(options));
+
+        services.AddCosmosDaemon(opt =>
+        {
+            opt.BatchSize = 42;
+        });
+
+        var provider = services.BuildServiceProvider();
+        var daemonOpts = provider.GetService<ProjectionDaemonOptions>();
+        daemonOpts.ShouldNotBeNull();
+        daemonOpts.BatchSize.ShouldBe(42);
+
+        var services2 = new ServiceCollection();
+        services2.AddSingleton(options);
+        services2.AddSingleton<IDocumentStore>(new DocumentStore(options));
+        AquilaCosmosDaemonGlobalExtensions.AddCosmosDaemon(services2, opt => opt.BatchSize = 99);
+        var provider2 = services2.BuildServiceProvider();
+        provider2.GetService<ProjectionDaemonOptions>()!.BatchSize.ShouldBe(99);
+    }
+
+    [Fact]
     public async Task Daemon_Processes_SingleStreamProjection_Branch_And_Updates_Aggregate_Document()
     {
         var storageProvider = new InMemoryStorageProvider();

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Aquila.Core.Storage;
 
 namespace Aquila.Core.Configuration;
 
@@ -12,6 +13,10 @@ public sealed class StoreMetadata : IStoreMetadata
         ArgumentNullException.ThrowIfNull(options);
         _options = options;
     }
+
+    public IDocumentStorageProvider DocumentStorage => _options.DocumentStorage;
+    public IEventStorageProvider EventStorage => _options.EventStorage;
+    public IProjectionStorageProvider ProjectionStorage => _options.ProjectionStorage;
 
     public IReadOnlyCollection<Type> RegisteredDocumentTypes => _options.Schema.Mappings.Keys.ToList();
 

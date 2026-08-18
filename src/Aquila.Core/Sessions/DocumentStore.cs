@@ -26,6 +26,12 @@ public sealed class DocumentStore : IDocumentStore
         {
             await Options.EventStorage.InitializeAsync(ct);
         }
+        if (Options.ProjectionStorage != null &&
+            !ReferenceEquals(Options.ProjectionStorage, Options.DocumentStorage) &&
+            !ReferenceEquals(Options.ProjectionStorage, Options.EventStorage))
+        {
+            await Options.ProjectionStorage.InitializeAsync(ct);
+        }
     }
 
     public static IDocumentStore For(Action<StoreOptions> configure)
@@ -71,6 +77,12 @@ public sealed class DocumentStore : IDocumentStore
         {
             Options.EventStorage.Dispose();
         }
+        if (Options.ProjectionStorage != null &&
+            !ReferenceEquals(Options.ProjectionStorage, Options.DocumentStorage) &&
+            !ReferenceEquals(Options.ProjectionStorage, Options.EventStorage))
+        {
+            Options.ProjectionStorage.Dispose();
+        }
         GC.SuppressFinalize(this);
     }
 
@@ -83,6 +95,12 @@ public sealed class DocumentStore : IDocumentStore
         if (Options.EventStorage != null && !ReferenceEquals(Options.EventStorage, Options.DocumentStorage))
         {
             await Options.EventStorage.DisposeAsync();
+        }
+        if (Options.ProjectionStorage != null &&
+            !ReferenceEquals(Options.ProjectionStorage, Options.DocumentStorage) &&
+            !ReferenceEquals(Options.ProjectionStorage, Options.EventStorage))
+        {
+            await Options.ProjectionStorage.DisposeAsync();
         }
         GC.SuppressFinalize(this);
     }

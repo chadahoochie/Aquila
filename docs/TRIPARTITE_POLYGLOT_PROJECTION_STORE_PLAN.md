@@ -36,7 +36,7 @@ flowchart TD
     Daemon -- "MultiStream Apply (Enrichment from Docs)" --> DocSPI --> CosmosDocs
     Daemon -- "Upsert Read Model" --> ProjSPI --> RedisProjections
     Daemon -- "Get/Save Checkpoint" --> CheckSPI --> RedisCheckpoints
-    Daemon -- "PurgeProjectionAsync() (Rebuild)" --> ProjSPI -- "Fast Key Prefix Wipe" --> RedisProjections
+    Daemon -- "PurgeProjectionAsync() (Rebuild)" --> ProjSPI -- "Fast Non-blocking UNLINK" --> RedisProjections
 ```
 
 ---
@@ -45,11 +45,11 @@ flowchart TD
 
 > [!IMPORTANT]
 > **1. Fail-Fast Validation on Polyglot Inline Projections**:
-> When `ProjectionStorage` and `EventStorage` reside on distinct physical backends (e.g., Cosmos DB + Redis), `ProjectionLifecycle.Inline` is **strictly forbidden**. Attempting to configure an inline projection in a polyglot setup throws an `InvalidOperationException` during `StoreOptions.Freeze()` with clear remediation instructions. Polyglot projections must use `ProjectionLifecycle.Async` or `ProjectionLifecycle.Live`.
+> When `ProjectionStorage` and `EventStorage` reside on distinct physical backends (e.g., Cosmos DB + Redis), `ProjectionLifecycle.Inline` is **strictly forbidden**. Attempting to configure an inline projection in a polyglot setup throws an `InvalidOperationException` during `StoreOptions.Freeze()` with clear remediation instructions. Polyglot projections must use `ProjectionLifecycle.Async` or `ProjectionLifecycle.Live` to prevent distributed dual writes without two-phase commit (2PC).
 
 > [!TIP]
 > **2. Full LINQ-Capable Projection SPI**:
-> `IProjectionStorageProvider` extends `IDocumentStorageProvider` with native projection management (`PurgeProjectionAsync`), supporting point reads (`LoadAsync<T>`), paged LINQ queries (`QueryPagedAsync<T>`), and reactive streaming (`StreamAsync<T>`).
+> `IProjectionStorageProvider` extends `IDocumentStorageProvider` with native projection management (`PurgeProjectionAsync`), supporting point reads (`LoadAsync<T>`), paged queries (`QueryPagedAsync<T>`), and reactive streaming (`StreamAsync<T>`).
 
 > [!NOTE]
 > **3. Unified Session API with $O(1)$ Zero-Allocation Routing**:
@@ -62,6 +62,34 @@ flowchart TD
 > [!TIP]
 > **5. Cross-Store Enrichment in Projections**:
 > Multi-stream projections have access to query primary documents (`IDocumentStorageProvider`) via the session during event processing while persisting projected views to `IProjectionStorageProvider`.
+
+> [!IMPORTANT]
+> **6. Shared Singleton Lifetime for `IConnectionMultiplexer`**:
+> Per Redis standards, `IConnectionMultiplexer` is designed to be a long-lived, thread-safe Singleton. Creating multiple connections across extensions causes socket exhaustion and thread pool starvation. Extensions accept existing `IConnectionMultiplexer` instances or register a shared singleton in `IServiceCollection`.
+
+> [!TIP]
+> **7. Zero-Allocation UTF-8 Byte Serialization**:
+> `Aquila.Redis` avoids `Newtonsoft.Json` reflection and intermediate string allocations. Payloads serialize directly to/from UTF-8 byte buffers (`ReadOnlyMemory<byte>` and `byte[]`) over `RedisValue`, maximizing throughput and Native AOT compatibility.
+
+> [!TIP]
+> **8. Non-Blocking Key Purge via Streaming `SCAN` and Server `UNLINK`**:
+> Instantaneous projection rebuilds must never block Redis's single-threaded event loop. `PurgeProjectionAsync` streams keys via `server.KeysAsync(...)` without buffering the entire keyspace in RAM, and dispatches chunked `KeyUnlinkAsync` (`UNLINK`) for asynchronous memory deallocation on the Redis engine.
+
+> [!TIP]
+> **9. Pipelined Batch Operations (`IBatch`)**:
+> `RedisDocumentStorageProvider.ExecuteBatchAsync` queues commands via `IDatabase.CreateBatch()` before awaiting tasks, dispatching multi-operation writes in a single TCP frame to reduce network latency from $O(N \times \text{RTT})$ to $1 \times \text{RTT}$.
+
+> [!NOTE]
+> **10. Keyspace Sharding with Cluster Hash Tags**:
+> Keys follow the format `"{tenantId:partitionKey}:docType:id"`. The `{tenantId:partitionKey}` hash tag ensures co-located partition keys land on the same Redis cluster slot (preventing `CROSSSLOT` errors during multi-key operations) while evenly distributing different partitions across cluster nodes.
+
+> [!NOTE]
+> **11. Monotonic Lock-Free Checkpoint Progression**:
+> `RedisProjectionCheckpointStore.SaveCheckpointAsync` executes an atomic Redis Lua script ensuring checkpoint sequences advance monotonically (`seq > current`), preventing sequence regression during daemon failover without external distributed locks.
+
+> [!TIP]
+> **12. Zero-Reflection Rebuilds in Projection Daemons**:
+> Projection Daemons (`ProjectionDaemon` and `CosmosProjectionDaemon`) invoke `IProjectionStorageProvider.PurgeProjectionAsync(...)` directly during rebuilds, eliminating runtime reflection and $O(N)$ document deletion scans.
 
 ---
 
@@ -85,7 +113,7 @@ Aquila/
 │   │       ├── SingleStreamProjection.cs            # [MODIFY] Route read-model writes to ProjectionStorage
 │   │       ├── MultiStreamProjection.cs             # [MODIFY] Route read-model writes/deletes to ProjectionStorage
 │   │       └── Daemon/
-│   │           └── ProjectionDaemon.cs              # [MODIFY] Use PurgeProjectionAsync for zero-RU rebuilds
+│   │           └── ProjectionDaemon.cs              # [MODIFY] Use PurgeProjectionAsync directly (zero reflection)
 │   ├── Aquila.Cosmos/
 │   │   ├── Storage/
 │   │   │   ├── CosmosStorageProvider.cs             # [MODIFY] Implement IProjectionStorageProvider
@@ -95,17 +123,17 @@ Aquila/
 │   │   ├── Extensions/
 │   │   │   └── ServiceCollectionExtensions.cs       # [MODIFY] Add UseCosmosProjections, UseCosmosEvents, UseCosmosDocuments
 │   │   └── Projections/
-│   │       └── CosmosProjectionDaemon.cs            # [MODIFY] Invoke PurgeProjectionAsync on rebuild
+│   │       └── CosmosProjectionDaemon.cs            # [MODIFY] Invoke PurgeProjectionAsync directly on rebuild
 │   ├── Aquila.Redis/                                # [NEW PROJECT] Dedicated Redis provider for Aquila
-│   │   ├── Aquila.Redis.csproj                      # [NEW] net10.0 project with StackExchange.Redis
+│   │   ├── Aquila.Redis.csproj                      # [NEW] net10.0 project with StackExchange.Redis, System.Text.Json
 │   │   ├── Configuration/
-│   │   │   └── RedisStorageOptions.cs               # [NEW] Connection, keyspace prefix, database index, key formatters
+│   │   │   └── RedisStorageOptions.cs               # [NEW] KeyPrefix, Database, BatchSize, SerializerOptions, KeyFormatters
 │   │   ├── Storage/
-│   │   │   ├── RedisDocumentStorageProvider.cs      # [NEW] IDocumentStorageProvider implementation on Redis
-│   │   │   ├── RedisProjectionStorageProvider.cs    # [NEW] IProjectionStorageProvider implementation with PurgeProjectionAsync
-│   │   │   └── RedisProjectionCheckpointStore.cs    # [NEW] IProjectionCheckpointStore implementation on Redis
+│   │   │   ├── RedisDocumentStorageProvider.cs      # [NEW] IDocumentStorageProvider with CreateBatch pipelining & UTF-8 serialization
+│   │   │   ├── RedisProjectionStorageProvider.cs    # [NEW] IProjectionStorageProvider with non-blocking UNLINK purge
+│   │   │   └── RedisProjectionCheckpointStore.cs    # [NEW] IProjectionCheckpointStore with Lua monotonic progression
 │   │   └── Extensions/
-│   │       └── RedisServiceCollectionExtensions.cs  # [NEW] UseRedis, UseRedisProjections, UseRedisCheckpoints extensions
+│   │       └── RedisServiceCollectionExtensions.cs  # [NEW] UseRedisProjections, UseRedisDocuments, AddRedisCheckpointStore
 │   └── Aquila.Samples/                              # [MODIFY] Add polyglot Cosmos + Redis sample demo
 ├── tests/
 │   ├── Aquila.Core.Tests/
@@ -121,7 +149,7 @@ Aquila/
 │       ├── Storage/
 │       │   ├── RedisDocumentStorageProviderTests.cs # [NEW] Point reads, writes, deletes, batching, queries
 │       │   ├── RedisProjectionStorageProviderTests.cs# [NEW] Projection storage and purge tests
-│       │   └── RedisProjectionCheckpointStoreTests.cs# [NEW] Checkpoint persistence tests
+│       │   └── RedisProjectionCheckpointStoreTests.cs# [NEW] Checkpoint persistence and monotonic safety tests
 │       └── Integration/
 │           └── CosmosRedisPolyglotIntegrationTests.cs# [NEW] End-to-end: Cosmos events + Redis projections + Daemon + Rebuild
 └── Aquila.slnx                                      # [MODIFY] Register Aquila.Redis and Aquila.Redis.Tests projects
@@ -228,6 +256,16 @@ protected IDocumentStorageProvider GetStorageForType(Type type) =>
 In `SaveChangesAsync()`:
 - Pending operations are partitioned into document mutations and projection mutations, executing batch writes in parallel on `DocumentStorage` and `ProjectionStorage`.
 
+#### `[MODIFY]` `src/Aquila.Core/Projections/Daemon/ProjectionDaemon.cs` & `CosmosProjectionDaemon.cs`
+Replace reflection-based deletion in `ClearProjectionDocumentsAsync` with direct SPI invocation:
+```csharp
+private async Task ClearProjectionDocumentsAsync(IProjection proj, CancellationToken ct)
+{
+    var docType = proj is IMultiStreamProjection multiProj ? multiProj.ReadModelType : proj.AggregateType;
+    await _documentStore.Options.ProjectionStorage.PurgeProjectionAsync(proj.Name, docType, ct).ConfigureAwait(false);
+}
+```
+
 ---
 
 ### Component 2: `Aquila.Redis` Package (`net10.0`)
@@ -237,6 +275,8 @@ In `SaveChangesAsync()`:
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
     <Title>Aquila.Redis</Title>
     <Description>High-performance Redis projection storage provider, document store, and checkpoint persistence for the Aquila Document Store & Event Sourcing Framework.</Description>
   </PropertyGroup>
@@ -249,7 +289,6 @@ In `SaveChangesAsync()`:
     <PackageReference Include="StackExchange.Redis" Version="2.8.24" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.10" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
   <ItemGroup>
@@ -257,6 +296,154 @@ In `SaveChangesAsync()`:
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 </Project>
+```
+
+#### `[NEW]` `src/Aquila.Redis/Configuration/RedisStorageOptions.cs`
+```csharp
+namespace Aquila.Redis.Configuration;
+
+public sealed class RedisStorageOptions
+{
+    public string KeyPrefix { get; set; } = "aquila:";
+    public int Database { get; set; } = 0;
+    public int BatchChunkSize { get; set; } = 500;
+    public JsonSerializerOptions SerializerOptions { get; set; } = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// Builds a cluster-shard-aware key with hash tag: "{tenant:partitionKey}:docType:id".
+    /// </summary>
+    public string BuildKey(string tenantId, string docType, string partitionKey, string id)
+    {
+        var safeTenant = string.IsNullOrWhiteSpace(tenantId) ? "default" : tenantId;
+        var safePk = string.IsNullOrWhiteSpace(partitionKey) ? id : partitionKey;
+        return $"{KeyPrefix}{{{safeTenant}:{safePk}}}:{docType}:{id}";
+    }
+
+    /// <summary>
+    /// Builds a search pattern for a document type across all partitions.
+    /// </summary>
+    public string BuildTypePattern(string docType) => $"{KeyPrefix}*:{docType}:*";
+}
+```
+
+#### `[NEW]` `src/Aquila.Redis/Storage/RedisDocumentStorageProvider.cs`
+```csharp
+namespace Aquila.Redis.Storage;
+
+public sealed class RedisDocumentStorageProvider : IDocumentStorageProvider
+{
+    private readonly IConnectionMultiplexer _multiplexer;
+    private readonly RedisStorageOptions _options;
+
+    public string ProviderName => "Redis";
+    public double LastRequestCharge => 0.0;
+    public double CumulativeRequestCharge => 0.0;
+
+    public RedisDocumentStorageProvider(IConnectionMultiplexer multiplexer, RedisStorageOptions? options = null)
+    {
+        _multiplexer = multiplexer ?? throw new ArgumentNullException(nameof(multiplexer));
+        _options = options ?? new RedisStorageOptions();
+    }
+
+    public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public async Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        var db = _multiplexer.GetDatabase(_options.Database);
+        var key = _options.BuildKey("default", typeof(T).Name, partitionKey, id);
+        
+        byte[]? bytes = await db.StringGetAsync(key).ConfigureAwait(false);
+        if (bytes == null || bytes.Length == 0) return null;
+
+        return JsonSerializer.Deserialize<DocumentEnvelope<T>>(bytes, _options.SerializerOptions);
+    }
+
+    public async Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        var db = _multiplexer.GetDatabase(_options.Database);
+        var key = _options.BuildKey(envelope.TenantId, envelope.DocType, envelope.PartitionKey, envelope.Id);
+        
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, _options.SerializerOptions);
+        await db.StringSetAsync(key, bytes).ConfigureAwait(false);
+    }
+
+    public async Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        var db = _multiplexer.GetDatabase(_options.Database);
+        var key = _options.BuildKey("default", typeof(T).Name, partitionKey, id);
+        await db.KeyUnlinkAsync(key).ConfigureAwait(false);
+    }
+
+    public async Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var db = _multiplexer.GetDatabase(_options.Database);
+        var batch = db.CreateBatch();
+        var tasks = new List<Task>();
+
+        foreach (var op in operations)
+        {
+            var key = _options.BuildKey("default", op.DocType, op.PartitionKey, op.Id);
+            if (op.OperationType == StorageOperationType.Upsert)
+            {
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(op.Document, _options.SerializerOptions);
+                tasks.Add(batch.StringSetAsync(key, bytes));
+            }
+            else if (op.OperationType == StorageOperationType.Delete)
+            {
+                tasks.Add(batch.KeyUnlinkAsync(key));
+            }
+        }
+
+        batch.Execute();
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<DocumentEnvelope<T>>> QueryDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class
+    {
+        var result = await QueryPagedDocumentsAsync(predicate, options, ct).ConfigureAwait(false);
+        return result.Documents;
+    }
+
+    public async Task<StorageQueryResult<T>> QueryPagedDocumentsAsync<T>(Expression<Func<DocumentEnvelope<T>, bool>>? predicate = null, QueryOptions? options = null, CancellationToken ct = default) where T : class
+    {
+        var db = _multiplexer.GetDatabase(_options.Database);
+        var endpoints = _multiplexer.GetEndPoints();
+        var pattern = _options.BuildTypePattern(typeof(T).Name);
+        var compiled = predicate?.Compile();
+
+        var documents = new List<DocumentEnvelope<T>>();
+        int maxItems = options?.MaxItemCount ?? 100;
+
+        foreach (var endpoint in endpoints)
+        {
+            var server = _multiplexer.GetServer(endpoint);
+            if (!server.IsConnected || server.IsReplica) continue;
+
+            await foreach (var key in server.KeysAsync(_options.Database, pattern).WithCancellation(ct).ConfigureAwait(false))
+            {
+                byte[]? bytes = await db.StringGetAsync(key).ConfigureAwait(false);
+                if (bytes == null || bytes.Length == 0) continue;
+
+                var env = JsonSerializer.Deserialize<DocumentEnvelope<T>>(bytes, _options.SerializerOptions);
+                if (env != null && (compiled == null || compiled(env)))
+                {
+                    documents.Add(env);
+                    if (documents.Count >= maxItems) break;
+                }
+            }
+            if (documents.Count >= maxItems) break;
+        }
+
+        return new StorageQueryResult<T>(documents, continuationToken: null, totalCount: documents.Count);
+    }
+
+    public void Dispose() { }
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
 ```
 
 #### `[NEW]` `src/Aquila.Redis/Storage/RedisProjectionStorageProvider.cs`
@@ -300,6 +487,9 @@ public sealed class RedisProjectionStorageProvider : IProjectionStorageProvider
     public Task ExecuteBatchAsync(IEnumerable<StorageOperation> operations, CancellationToken ct = default) =>
         _innerDocumentProvider.ExecuteBatchAsync(operations, ct);
 
+    /// <summary>
+    /// Purges all projection read models asynchronously using non-blocking streaming UNLINK batches.
+    /// </summary>
     public async Task PurgeProjectionAsync(string projectionName, Type readModelType, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
@@ -307,21 +497,27 @@ public sealed class RedisProjectionStorageProvider : IProjectionStorageProvider
 
         var db = _multiplexer.GetDatabase(_options.Database);
         var endpoints = _multiplexer.GetEndPoints();
+        var pattern = _options.BuildTypePattern(readModelType.Name);
 
         foreach (var endpoint in endpoints)
         {
             var server = _multiplexer.GetServer(endpoint);
             if (!server.IsConnected || server.IsReplica) continue;
 
-            var pattern = $"{_options.KeyPrefix}*:{readModelType.Name}:*";
-            var keys = server.Keys(_options.Database, pattern).ToArray();
-
-            if (keys.Length > 0)
+            var batch = new List<RedisKey>(_options.BatchChunkSize);
+            await foreach (var key in server.KeysAsync(_options.Database, pattern).WithCancellation(ct).ConfigureAwait(false))
             {
-                foreach (var chunk in keys.Chunk(500))
+                batch.Add(key);
+                if (batch.Count >= _options.BatchChunkSize)
                 {
-                    await db.KeyDeleteAsync(chunk).ConfigureAwait(false);
+                    await db.KeyUnlinkAsync(batch.ToArray()).ConfigureAwait(false);
+                    batch.Clear();
                 }
+            }
+
+            if (batch.Count > 0)
+            {
+                await db.KeyUnlinkAsync(batch.ToArray()).ConfigureAwait(false);
             }
         }
     }
@@ -337,6 +533,15 @@ namespace Aquila.Redis.Storage;
 
 public sealed class RedisProjectionCheckpointStore : IProjectionCheckpointStore
 {
+    private static readonly LuaScript MonotonicSaveScript = LuaScript.Prepare(@"
+        local cur = redis.call('GET', @key)
+        if not cur or tonumber(@seq) > tonumber(cur) then
+            redis.call('SET', @key, @seq)
+            return 1
+        end
+        return 0
+    ");
+
     private readonly IConnectionMultiplexer _multiplexer;
     private readonly string _keyPrefix;
     private readonly int _database;
@@ -360,40 +565,54 @@ public sealed class RedisProjectionCheckpointStore : IProjectionCheckpointStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
         var db = _multiplexer.GetDatabase(_database);
-        await db.StringSetAsync($"{_keyPrefix}{projectionName}", sequence).ConfigureAwait(false);
+        var key = (RedisKey)$"{_keyPrefix}{projectionName}";
+
+        await db.ScriptEvaluateAsync(MonotonicSaveScript, new { key = key, seq = sequence }).ConfigureAwait(false);
     }
 }
 ```
 
 #### `[NEW]` `src/Aquila.Redis/Extensions/RedisServiceCollectionExtensions.cs`
 ```csharp
+namespace Aquila.Redis.Extensions;
+
 public static class RedisServiceCollectionExtensions
 {
-    public static StoreOptions UseRedisProjections(this StoreOptions options, string connectionString, Action<RedisStorageOptions>? configure = null)
+    public static StoreOptions UseRedisProjections(this StoreOptions options, IConnectionMultiplexer multiplexer, Action<RedisStorageOptions>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(multiplexer);
+
         var redisOptions = new RedisStorageOptions();
         configure?.Invoke(redisOptions);
-        var multiplexer = ConnectionMultiplexer.Connect(connectionString);
         options.ProjectionStorage = new RedisProjectionStorageProvider(multiplexer, redisOptions);
         return options;
     }
 
-    public static StoreOptions UseRedisDocuments(this StoreOptions options, string connectionString, Action<RedisStorageOptions>? configure = null)
+    public static StoreOptions UseRedisDocuments(this StoreOptions options, IConnectionMultiplexer multiplexer, Action<RedisStorageOptions>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(multiplexer);
+
         var redisOptions = new RedisStorageOptions();
         configure?.Invoke(redisOptions);
-        var multiplexer = ConnectionMultiplexer.Connect(connectionString);
         options.DocumentStorage = new RedisDocumentStorageProvider(multiplexer, redisOptions);
         return options;
     }
 
-    public static IServiceCollection AddRedisCheckpointStore(this IServiceCollection services, string connectionString, string keyPrefix = "aquila:checkpoints:")
+    public static IServiceCollection AddRedisCheckpointStore(this IServiceCollection services, IConnectionMultiplexer multiplexer, string keyPrefix = "aquila:checkpoints:", int database = 0)
     {
-        services.AddSingleton<IProjectionCheckpointStore>(sp =>
-        {
-            var multiplexer = ConnectionMultiplexer.Connect(connectionString);
-            return new RedisProjectionCheckpointStore(multiplexer, keyPrefix);
-        });
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(multiplexer);
+
+        services.AddSingleton<IProjectionCheckpointStore>(new RedisProjectionCheckpointStore(multiplexer, keyPrefix, database));
+        return services;
+    }
+
+    public static IServiceCollection AddAquilaRedis(this IServiceCollection services, string connectionString)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(connectionString));
         return services;
     }
 }
@@ -407,15 +626,15 @@ public static class RedisServiceCollectionExtensions
 1. **Aquila.Core Tests**:
    - `TripartiteStorageRoutingTests`:
      - Verify `LoadAsync<T>` routes to `ProjectionStorage` for registered read models, and `DocumentStorage` for domain documents.
-     - Verify `QueryPagedAsync<T>` and `StreamAsync<T>` route correctly.
+     - Verify `QueryPagedAsync<T>` and `StreamAsync<T>` route correctly with precomputed $O(1)$ type lookup.
      - Verify `SaveChangesAsync` splits mutations into document batch and projection batch.
    - `PolyglotProjectionValidationTests`:
      - Verify `options.Freeze()` throws `InvalidOperationException` if `ProjectionLifecycle.Inline` is used when `ProjectionStorage != EventStorage`.
      - Verify `options.Freeze()` succeeds when all projections are `ProjectionLifecycle.Async` or `ProjectionLifecycle.Live`.
 2. **Aquila.Redis Tests**:
-   - `RedisDocumentStorageProviderTests`: CRUD, point read `< 1ms`, batch execution with pipelining, in-memory predicate filtering, continuation token paging.
-   - `RedisProjectionStorageProviderTests`: `PurgeProjectionAsync` wipes keys matching `{KeyPrefix}*:{ReadModel}:*`.
-   - `RedisProjectionCheckpointStoreTests`: `GetCheckpointAsync`, `SaveCheckpointAsync`, restart and recovery.
+   - `RedisDocumentStorageProviderTests`: CRUD, point read `< 1ms`, batch execution with pipelining (`CreateBatch`), in-memory predicate filtering, continuation token paging.
+   - `RedisProjectionStorageProviderTests`: `PurgeProjectionAsync` wipes keys matching `{KeyPrefix}*:{ReadModel}:*` via non-blocking `UNLINK` streaming.
+   - `RedisProjectionCheckpointStoreTests`: `GetCheckpointAsync`, `SaveCheckpointAsync`, monotonic progression script, restart and recovery.
 3. **End-to-End Polyglot Integration Tests** (`Aquila.Redis.Tests/Integration`):
    - Real Cosmos DB (or Cosmos test container) for Event Store.
    - Real Redis (via `Testcontainers.Redis`) for Projection Store and Checkpoint Store.

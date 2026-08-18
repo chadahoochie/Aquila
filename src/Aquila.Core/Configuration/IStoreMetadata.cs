@@ -1,3 +1,5 @@
+using Aquila.Core.Storage;
+
 namespace Aquila.Core.Configuration;
 
 public interface IStoreMetadata
@@ -6,6 +8,9 @@ public interface IStoreMetadata
     DocumentMapping MappingFor(Type documentType);
     DocumentMapping MappingFor<T>();
     bool IsSoftDeleted(Type documentType);
+    IDocumentStorageProvider DocumentStorage { get; }
+    IEventStorageProvider EventStorage { get; }
+    IProjectionStorageProvider ProjectionStorage { get; }
 }
 
 public sealed class DocumentMapping

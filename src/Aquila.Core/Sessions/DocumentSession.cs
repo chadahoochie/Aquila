@@ -63,6 +63,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             Id = id,
             PartitionKey = pk,
             DocType = docType,
+            ModelType = typeof(T),
             Document = envelope
         });
 
@@ -116,7 +117,8 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             OperationType = StorageOperationType.Delete,
             Id = id,
             PartitionKey = pk,
-            DocType = typeof(T).Name
+            DocType = typeof(T).Name,
+            ModelType = typeof(T)
         });
     }
 
@@ -151,6 +153,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             Id = id,
             PartitionKey = pk,
             DocType = docType,
+            ModelType = typeof(T),
             Document = envelope
         });
     }
@@ -200,6 +203,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
                 Id = id,
                 PartitionKey = pk,
                 DocType = typeof(T).Name,
+                ModelType = typeof(T),
                 Document = envelope
             });
         }
@@ -221,6 +225,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             Id = id,
             PartitionKey = pk,
             DocType = typeof(T).Name,
+            ModelType = typeof(T),
             PatchOperations = expr.Operations
         });
 
@@ -262,7 +267,46 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
         // 2. Flush pending storage operations
         if (_pendingOperations.Count > 0)
         {
-            await DocumentStorage.ExecuteBatchAsync(_pendingOperations.ToList(), ct);
+            if (ReferenceEquals(DocumentStorage, Options.ProjectionStorage))
+            {
+                await DocumentStorage.ExecuteBatchAsync(_pendingOperations.ToList(), ct).ConfigureAwait(false);
+            }
+            else
+            {
+                var docOps = new List<StorageOperation>();
+                var projOps = new List<StorageOperation>();
+
+                foreach (var op in _pendingOperations)
+                {
+                    bool isProj = (op.ModelType != null && Options.IsProjectionReadModel(op.ModelType)) ||
+                                  (op.Document != null && Options.IsProjectionReadModel(GetModelTypeFromDocument(op.Document)));
+
+                    if (isProj)
+                    {
+                        projOps.Add(op);
+                    }
+                    else
+                    {
+                        docOps.Add(op);
+                    }
+                }
+
+                if (docOps.Count > 0 && projOps.Count > 0)
+                {
+                    await Task.WhenAll(
+                        DocumentStorage.ExecuteBatchAsync(docOps, ct),
+                        Options.ProjectionStorage.ExecuteBatchAsync(projOps, ct)
+                    ).ConfigureAwait(false);
+                }
+                else if (docOps.Count > 0)
+                {
+                    await DocumentStorage.ExecuteBatchAsync(docOps, ct).ConfigureAwait(false);
+                }
+                else if (projOps.Count > 0)
+                {
+                    await Options.ProjectionStorage.ExecuteBatchAsync(projOps, ct).ConfigureAwait(false);
+                }
+            }
         }
 
         // 3. Process inline projections
@@ -321,7 +365,8 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             .GetMethod(nameof(IDocumentStorageProvider.UpsertDocumentAsync))!
             .MakeGenericMethod(proj.AggregateType);
 
-        var upsertTask = (Task)upsertMethod.Invoke(DocumentStorage, new object[] { envelope, ct })!;
+        var targetStorage = Options.IsProjectionReadModel(proj.AggregateType) ? Options.ProjectionStorage : DocumentStorage;
+        var upsertTask = (Task)upsertMethod.Invoke(targetStorage, new object[] { envelope, ct })!;
         await upsertTask.ConfigureAwait(false);
 
         if (TrackingMode != TrackingMode.Lightweight)
@@ -406,6 +451,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
                         Id = tracked.Id,
                         PartitionKey = pk,
                         DocType = tracked.EntityType.Name,
+                        ModelType = tracked.EntityType,
                         Document = envelopeObj
                     });
                 }
@@ -413,6 +459,16 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
                 InnerIdentityMap.UpdateSnapshot(tracked.EntityType, tracked.Id, currentBytes);
             }
         }
+    }
+
+    private static Type GetModelTypeFromDocument(object document)
+    {
+        var docType = document.GetType();
+        if (docType.IsGenericType && docType.GetGenericTypeDefinition() == typeof(DocumentEnvelope<>))
+        {
+            return docType.GetGenericArguments()[0];
+        }
+        return docType;
     }
 
     // Performance Optimization: Cache generic MethodInfo per entity type to eliminate reflection lookup
