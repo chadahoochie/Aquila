@@ -46,6 +46,51 @@ public sealed class CosmosDocumentStorageProvider : IDocumentStorageProvider
     public void Dispose() { }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
+    public async Task PurgeDocumentsByTypeAsync(Type type, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        var container = GetContainer(type);
+        var docType = type.Name;
+
+        var queryDef = new QueryDefinition("SELECT c.id, c.pk, c.PartitionKey, c._docType, c.DocType FROM c WHERE c._docType = @docType OR c.DocType = @docType")
+            .WithParameter("@docType", docType);
+
+        using var iterator = container.GetItemQueryIterator<CosmosDocumentEnvelope>(queryDef);
+        var itemsToDelete = new List<(string Id, string PartitionKey)>();
+
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+            RecordCharge(response.RequestCharge);
+            foreach (var item in response)
+            {
+                if (item != null && !string.IsNullOrWhiteSpace(item.Id))
+                {
+                    var pk = !string.IsNullOrWhiteSpace(item.PartitionKey) ? item.PartitionKey : item.Id;
+                    itemsToDelete.Add((item.Id, pk));
+                }
+            }
+        }
+
+        if (itemsToDelete.Count == 0) return;
+
+        var deleteMethod = typeof(CosmosDocumentStorageProvider)
+            .GetMethod(nameof(DeleteDocumentAsync))!
+            .MakeGenericMethod(type);
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount * 2),
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(itemsToDelete, parallelOptions, async (item, token) =>
+        {
+            var task = (Task)deleteMethod.Invoke(this, new object[] { item.Id, item.PartitionKey, token })!;
+            await task.ConfigureAwait(false);
+        }).ConfigureAwait(false);
+    }
+
     public async Task<DocumentEnvelope<T>?> ReadDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);

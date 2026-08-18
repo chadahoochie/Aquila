@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Linq.Expressions;
 using Aquila.Core.Events;
 using Aquila.Core.Projections;
@@ -225,12 +226,44 @@ public sealed class StoreOptions
     private string _defaultTenantId = "default";
     private IDocumentStorageProvider _documentStorage = new InMemoryStorageProvider();
     private IEventStorageProvider _eventStorage = new InMemoryStorageProvider();
+    private IProjectionStorageProvider _projectionStorage = new InMemoryStorageProvider();
+    private FrozenSet<Type>? _projectionReadModelTypes;
     private bool _isFrozen;
 
     public bool IsReadOnly => _isFrozen;
 
     public void Freeze()
     {
+        if (_isFrozen) return;
+
+        // 1. Precompute immutable projection type registry for O(1) routing
+        var types = new HashSet<Type>();
+        foreach (var proj in Projections.Projections)
+        {
+            if (proj is IMultiStreamProjection multi)
+            {
+                types.Add(multi.ReadModelType);
+            }
+            types.Add(proj.AggregateType);
+        }
+        _projectionReadModelTypes = types.ToFrozenSet();
+
+        // 2. Fail-Fast Polyglot Inline Validation
+        bool isPolyglot = !ReferenceEquals(ProjectionStorage, EventStorage);
+        if (isPolyglot)
+        {
+            foreach (var proj in Projections.Projections)
+            {
+                if (proj.Lifecycle == ProjectionLifecycle.Inline)
+                {
+                    throw new InvalidOperationException(
+                        $"Projection '{proj.Name}' is registered with ProjectionLifecycle.Inline, but ProjectionStorage ({ProjectionStorage.ProviderName}) " +
+                        $"and EventStorage ({EventStorage.ProviderName}) are different physical providers. " +
+                        "Polyglot projections must use ProjectionLifecycle.Async or ProjectionLifecycle.Live to prevent distributed partial-failure dual writes without 2PC.");
+                }
+            }
+        }
+
         _isFrozen = true;
     }
 
@@ -258,7 +291,7 @@ public sealed class StoreOptions
         set
         {
             AssertNotFrozen();
-            _documentStorage = value;
+            _documentStorage = value ?? throw new ArgumentNullException(nameof(value));
         }
     }
 
@@ -268,9 +301,22 @@ public sealed class StoreOptions
         set
         {
             AssertNotFrozen();
-            _eventStorage = value;
+            _eventStorage = value ?? throw new ArgumentNullException(nameof(value));
         }
     }
+
+    public IProjectionStorageProvider ProjectionStorage
+    {
+        get => _projectionStorage;
+        set
+        {
+            AssertNotFrozen();
+            _projectionStorage = value ?? throw new ArgumentNullException(nameof(value));
+        }
+    }
+
+    public bool IsProjectionReadModel(Type type) =>
+        _projectionReadModelTypes != null && _projectionReadModelTypes.Contains(type);
 
     public SchemaPolicy Schema { get; } = new();
     public ProjectionRegistration Projections { get; } = new();
@@ -283,6 +329,21 @@ public sealed class StoreOptions
         ArgumentNullException.ThrowIfNull(eventStorage);
         DocumentStorage = documentStorage;
         EventStorage = eventStorage;
+        if (documentStorage is IProjectionStorageProvider projStorage)
+        {
+            ProjectionStorage = projStorage;
+        }
+    }
+
+    public void UseStorageProvider(IDocumentStorageProvider documentStorage, IEventStorageProvider eventStorage, IProjectionStorageProvider projectionStorage)
+    {
+        AssertNotFrozen();
+        ArgumentNullException.ThrowIfNull(documentStorage);
+        ArgumentNullException.ThrowIfNull(eventStorage);
+        ArgumentNullException.ThrowIfNull(projectionStorage);
+        DocumentStorage = documentStorage;
+        EventStorage = eventStorage;
+        ProjectionStorage = projectionStorage;
     }
 
     public void UseStorageProvider(object provider)
@@ -297,6 +358,10 @@ public sealed class StoreOptions
         {
             EventStorage = evtStorage;
         }
+        if (provider is IProjectionStorageProvider projStorage)
+        {
+            ProjectionStorage = projStorage;
+        }
     }
 
     public void UseInMemoryStorage()
@@ -305,5 +370,6 @@ public sealed class StoreOptions
         var provider = new InMemoryStorageProvider();
         DocumentStorage = provider;
         EventStorage = provider;
+        ProjectionStorage = provider;
     }
 }

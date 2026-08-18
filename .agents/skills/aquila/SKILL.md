@@ -5,30 +5,33 @@ description: Enforces architectural standards, configuration patterns, document 
 
 # Aquila Framework Architecture & Coding Standards
 
-This skill defines the mandatory architectural rules, implementation patterns, performance guidelines, and testing conventions for applications using or extending the **Aquila Framework**—a high-performance, Azure Cosmos DB native Document Store and Event Sourcing engine for .NET 10.
+This skill defines the mandatory architectural rules, implementation patterns, performance guidelines, and testing conventions for applications using or extending the **Aquila Framework**—a high-performance, Azure Cosmos DB and Redis native Document Store and Event Sourcing engine for .NET 10.
 
 ---
 
-## 1. Architectural Overview & Component Structure
+## 1. Architectural Overview & Tripartite Storage SPI
 
-Aquila decouples business domain semantics (sessions, units-of-work, aggregates, and projections) from physical storage engines using a pluggable Service Provider Interface (SPI):
+Aquila decouples business domain semantics (sessions, units-of-work, aggregates, and projections) from physical storage engines using a pluggable **Tripartite Storage Architecture** defined in [`StorageContracts.cs`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs):
 
 - **`Aquila.Core`**: Target framework `net10.0`. Core abstractions ([`IDocumentStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Abstractions/IDocumentStore.cs#L86), [`IDocumentSession`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Abstractions/IDocumentStore.cs#L59), [`IQuerySession`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Abstractions/IDocumentStore.cs#L35), [`IEventStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Abstractions/IDocumentStore.cs#L14)), session lifecycle & tracking modes ([`TrackingMode`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Sessions/TrackingMode.cs)), mapping policies ([`SchemaPolicy`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Configuration/StoreOptions.cs#L85)), compiled query caching ([`CompiledQueryCache`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Queries/CompiledQueryCache.cs)), patch expressions ([`IPatchExpression<T>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Patching/IPatchExpression.cs)), event upcasting ([`IEventUpcaster`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/IEventUpcaster.cs)), snapshot strategies ([`ISnapshotStrategy<T>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/ISnapshotStrategy.cs)), projections ([`SingleStreamProjection<T>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/SingleStreamProjection.cs), [`MultiStreamProjection<TDoc, TId>`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/MultiStreamProjection.cs)), background daemon ([`IProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/IProjectionDaemon.cs)), and built-in [`InMemoryStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/InMemoryStorageProvider.cs).
-- **`Aquila.Cosmos`**: Target framework `net10.0`. Cosmos DB SPI storage providers ([`CosmosDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosDocumentStorageProvider.cs), [`CosmosEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosEventStorageProvider.cs), [`CosmosStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs)), partition key builder ([`CosmosPartitionKeyHelper`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosPartitionKeyHelper.cs)), LINQ rewriter ([`CosmosExpressionRewriter`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosExpressionRewriter.cs)), Change Feed daemon ([`CosmosProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs)), and ASP.NET Core DI extensions (`AddAquila`, `UseCosmos`, `AddCosmosDaemon`).
+- **`Aquila.Cosmos`**: Target framework `net10.0`. Cosmos DB SPI storage providers ([`CosmosDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosDocumentStorageProvider.cs), [`CosmosEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosEventStorageProvider.cs), [`CosmosProjectionStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosProjectionStorageProvider.cs), [`CosmosStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosStorageProvider.cs)), container resolver ([`CosmosContainerResolver`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosContainerResolver.cs)), partition key builder ([`CosmosPartitionKeyHelper`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosPartitionKeyHelper.cs)), LINQ rewriter ([`CosmosExpressionRewriter`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Storage/CosmosExpressionRewriter.cs)), Change Feed daemon ([`CosmosProjectionDaemon`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Cosmos/Projections/CosmosProjectionDaemon.cs)), and DI extensions (`AddAquila`, `UseCosmos`, `UseCosmosDocuments`, `UseCosmosEvents`, `UseCosmosProjections`, `AddCosmosDaemon`).
+- **`Aquila.Redis`**: Target framework `net10.0`. Redis SPI providers ([`RedisProjectionStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Redis/Storage/RedisProjectionStorageProvider.cs), [`RedisDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Redis/Storage/RedisDocumentStorageProvider.cs), [`RedisProjectionCheckpointStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Redis/Storage/RedisProjectionCheckpointStore.cs)), cluster hash tag routing (`{tenant:pk}`), `CreateBatch()` TCP pipelining, non-blocking `UNLINK` streaming purges, and atomic monotonic Lua checkpoint scripts.
 
 ### Storage SPI Contracts
-
-All storage backends implement the SPI contracts defined in [`StorageContracts.cs`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs):
 - [`IDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L78): Atomic reads, queries, upserts, deletes, and batch execution of `StorageOperation`s.
 - [`IEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L92): Append stream events, fetch streams/global sequences, get stream headers, save/get aggregate snapshots.
+- [`IProjectionStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L153): Materialized read models, point views, high-throughput batch updates, and native instantaneous zero-RU rebuilds ([`PurgeProjectionAsync`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L159)).
+- [`IProjectionCheckpointStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/IProjectionCheckpointStore.cs): Durable checkpoint sequence persistence for async projection daemons.
 
 ---
 
 ## 2. Dependency Injection & Configuration Patterns
 
-Register Aquila in `Program.cs` or service initialization extensions using fluent builder calls:
+### 1. Simple Setup: Mono-Provider (Single Provider for All)
 
-### Azure Cosmos DB Provider
+In a mono-provider configuration, all three SPI roles point to the same physical storage engine. Synchronous `ProjectionLifecycle.Inline` projections are supported.
+
+#### Option A: Azure Cosmos DB
 ```csharp
 using Aquila.Core.Configuration;
 using Aquila.Core.Projections;
@@ -69,7 +72,7 @@ services.AddAquila(options =>
 services.AddCosmosDaemon();
 ```
 
-### In-Memory Storage Provider (Testing & Local Development)
+#### Option B: In-Memory Storage Provider (Testing & Local Development)
 ```csharp
 services.AddAquila(options =>
 {
@@ -80,6 +83,73 @@ services.AddAquila(options =>
 // Register standard polling projection daemon
 services.AddAquilaDaemon();
 ```
+
+---
+
+### 2. Complex Setup: Polyglot (Cosmos DB for Events & Documents + Redis for Projections)
+
+```csharp
+using Aquila.Core.Configuration;
+using Aquila.Core.Projections;
+using Aquila.Cosmos.Extensions;
+using Aquila.Redis.Configuration;
+using Aquila.Redis.Extensions;
+using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
+
+// 1. Register shared IConnectionMultiplexer singleton
+services.AddAquilaRedis(configuration.GetConnectionString("Redis")!);
+
+// 2. Configure Aquila with Polyglot Tripartite Storage
+services.AddAquila(options =>
+{
+    options.DefaultTenantId = "tenant-primary";
+
+    // Cosmos DB for DocumentStorage & EventStorage
+    options.UseCosmos(configuration.GetConnectionString("CosmosDb")!, cosmos =>
+    {
+        cosmos.DefaultDatabase = "ProductionDB";
+        cosmos.ConfigureEvents("EventsContainer", "EventsDB");
+        cosmos.ConfigureSnapshots("SnapshotsContainer", "SnapshotsDB");
+        cosmos.ConfigureDocuments("DocumentsContainer", "ProductionDB");
+    });
+
+    // Redis for ProjectionStorage
+    options.UseRedisProjections(configuration.GetConnectionString("Redis")!, (RedisStorageOptions redis) =>
+    {
+        redis.KeyPrefix = "aquila:readmodels:";
+        redis.Database = 0;
+        redis.BatchChunkSize = 500;
+    });
+
+    options.Events.SnapshotEvery<OrderAggregate>(threshold: 50);
+
+    options.Schema.For<Customer>()
+        .Identity(c => c.Id)
+        .PartitionKey(c => c.Region);
+
+    options.Schema.For<OrderSummary>()
+        .Identity(s => s.OrderId)
+        .PartitionKey(s => s.OrderId);
+
+    // IMPORTANT: Polyglot projections MUST use Async or Live
+    options.Projections.Add<OrderSummaryProjection>(ProjectionLifecycle.Async);
+    options.Projections.Add<CustomerOrderHistoryProjection>(ProjectionLifecycle.Async);
+});
+
+// 3. Register Redis Checkpoint Store
+services.AddRedisCheckpointStore(
+    multiplexer: ConnectionMultiplexer.Connect(configuration.GetConnectionString("Redis")!),
+    keyPrefix: "aquila:checkpoints:",
+    database: 0
+);
+
+// 4. Register Background Projection Daemon
+services.AddCosmosDaemon();
+```
+
+> [!IMPORTANT]
+> **Polyglot Fail-Fast Rule**: When `ProjectionStorage` and `EventStorage` are separate physical stores (e.g. Cosmos DB + Redis), `ProjectionLifecycle.Inline` throws an `InvalidOperationException` at `StoreOptions.Freeze()`. Polyglot projections must use `ProjectionLifecycle.Async` or `ProjectionLifecycle.Live`.
 
 ---
 
@@ -94,9 +164,10 @@ Choose session tracking modes based on operational needs:
 | `TrackingMode.DirtyTracking` (Default) | Enabled | Automatic (JSON diff) | Standard load-mutate-`SaveChangesAsync()` unit of work. Entities are snapshotted at load/store time; `SaveChangesAsync()` auto-detects diffs and queues updates without explicit `Store()` calls. |
 
 ### Crucial Execution Rules:
-1. **Asynchronous Query Execution**: All querying is purely non-blocking and asynchronous via `await session.QueryAsync<T>(...)`, `await session.QueryPagedAsync<T>(...)`, or `await foreach (var item in session.StreamAsync<T>(...))`. Synchronous blocking LINQ queries are excluded by design to prevent thread-pool starvation.
-2. **Document State Snapshotting on `Store(doc)`**: `session.Store()` immediately serializes and snapshots the object state. Subsequent mutations to the original entity instance in application code will NOT pollute the pending unit-of-work state prior to `SaveChangesAsync()`.
-3. **Session Lifecycle Management**: All sessions implement `IDisposable` and `IAsyncDisposable`. Always wrap session usage in `using var session = store.OpenSession()` or `await using var session = store.OpenSession()`.
+1. **$O(1)$ Zero-Allocation Type Routing**: `session.LoadAsync<T>()`, `session.QueryAsync<T>()`, and `session.Store<T>()` inspect `Options.IsProjectionReadModel(typeof(T))`. Projection read models route directly to `ProjectionStorage` (Redis); primary domain documents route to `DocumentStorage` (Cosmos DB).
+2. **Asynchronous Query Execution**: All querying is purely non-blocking and asynchronous via `await session.QueryAsync<T>(...)`, `await session.QueryPagedAsync<T>(...)`, or `await foreach (var item in session.StreamAsync<T>(...))`. Synchronous blocking LINQ queries are excluded by design to prevent thread-pool starvation.
+3. **Document State Snapshotting on `Store(doc)`**: `session.Store()` immediately serializes and snapshots the object state. Subsequent mutations to the original entity instance in application code will NOT pollute the pending unit-of-work state prior to `SaveChangesAsync()`.
+4. **Session Lifecycle Management**: All sessions implement `IDisposable` and `IAsyncDisposable`. Always wrap session usage in `using var session = store.OpenSession()` or `await using var session = store.OpenSession()`.
 
 ---
 
@@ -185,8 +256,8 @@ var historicalOrder = await session.Events.AggregateStreamAsync<OrderAggregate>(
 
 Projections transform raw domain events into materialized read models across three lifecycles:
 
-1. **`ProjectionLifecycle.Inline`**: Executes synchronously inside `SaveChangesAsync()` within the same storage transaction commit.
-2. **`ProjectionLifecycle.Async`**: Processed in background batches by the `IProjectionDaemon`.
+1. **`ProjectionLifecycle.Inline`**: Executes synchronously inside `SaveChangesAsync()` within the same storage transaction commit (mono-store only).
+2. **`ProjectionLifecycle.Async`**: Processed in background batches by the `IProjectionDaemon` (mono-store and polyglot).
 3. **`ProjectionLifecycle.Live`**: Evaluated on-the-fly via `session.LiveStreamAsync<TDoc>(streamId)` without persisting read-model documents.
 
 ### SingleStreamProjection
@@ -202,7 +273,7 @@ public class OrderSummaryProjection : SingleStreamProjection<OrderAggregate>
 }
 ```
 
-### MultiStreamProjection
+### MultiStreamProjection & Cross-Store Enrichment
 Aggregates events across *multiple* streams into a shared read-model document:
 ```csharp
 public class CustomerOrderSummaryProjection : MultiStreamProjection<CustomerSummary, string>
@@ -233,7 +304,7 @@ var daemon = serviceProvider.GetRequiredService<IProjectionDaemon>();
 // Block until all async projections catch up to the latest global sequence
 await daemon.CatchUpAsync();
 
-// Zero-Downtime Rebuild: Deletes read-model documents, resets checkpoint sequence to 0, and replays full event history
+// Zero-Downtime Rebuild: Invokes PurgeProjectionAsync (non-blocking UNLINK on Redis), resets checkpoint to 0, and replays history
 await daemon.RebuildProjectionAsync<CustomerOrderSummaryProjection>();
 ```
 
@@ -372,5 +443,7 @@ options.Events.RegisterUpcaster<UserRegisteredUpcaster>();
 - [ ] Are internal/public infrastructure classes explicitly marked `sealed` for JIT devirtualization?
 - [ ] Are hot execution paths free of runtime reflection (using compiled expression delegates)?
 - [ ] Are all query operations non-blocking and asynchronous (using `QueryAsync<T>()`, `QueryPagedAsync<T>()`, `StreamAsync<T>()`)?
+- [ ] Are polyglot projections configured as `ProjectionLifecycle.Async` or `ProjectionLifecycle.Live` (never `Inline`)?
 - [ ] Are null checks enforced on all method inputs (`ArgumentNullException.ThrowIfNull`)?
 - [ ] Do all automated tests pass via `dotnet test Aquila.slnx`?
+

@@ -507,6 +507,20 @@ public sealed class InMemoryDocumentStorageProvider : IDocumentStorageProvider
         }
     }
 
+    public Task PurgeDocumentsByTypeAsync(Type type, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        var prefix = $"{type.Name}:";
+        foreach (var key in _documents.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                _documents.TryRemove(key, out _);
+            }
+        }
+        return Task.CompletedTask;
+    }
+
     public void Dispose() { }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

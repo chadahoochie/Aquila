@@ -144,6 +144,54 @@ public sealed class ServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void UseCosmosDocuments_With_Client_And_ConnectionString()
+    {
+        var client = Substitute.For<CosmosClient>();
+        var options1 = new StoreOptions();
+        options1.UseCosmosDocuments(client, cosmos => cosmos.DefaultDatabase = "DocDb");
+
+        options1.DocumentStorage.ShouldNotBeNull();
+        options1.DocumentStorage.ShouldBeOfType<CosmosDocumentStorageProvider>();
+
+        var options2 = new StoreOptions();
+        options2.UseCosmosDocuments(DummyConnectionString, cosmos => cosmos.DefaultDatabase = "DocDb2");
+        options2.DocumentStorage.ShouldNotBeNull();
+        options2.DocumentStorage.ShouldBeOfType<CosmosDocumentStorageProvider>();
+    }
+
+    [Fact]
+    public void UseCosmosEvents_With_Client_And_ConnectionString()
+    {
+        var client = Substitute.For<CosmosClient>();
+        var options1 = new StoreOptions();
+        options1.UseCosmosEvents(client, cosmos => cosmos.DefaultDatabase = "EventDb");
+
+        options1.EventStorage.ShouldNotBeNull();
+        options1.EventStorage.ShouldBeOfType<CosmosEventStorageProvider>();
+
+        var options2 = new StoreOptions();
+        options2.UseCosmosEvents(DummyConnectionString, cosmos => cosmos.DefaultDatabase = "EventDb2");
+        options2.EventStorage.ShouldNotBeNull();
+        options2.EventStorage.ShouldBeOfType<CosmosEventStorageProvider>();
+    }
+
+    [Fact]
+    public void UseCosmosProjections_With_Client_And_ConnectionString()
+    {
+        var client = Substitute.For<CosmosClient>();
+        var options1 = new StoreOptions();
+        options1.UseCosmosProjections(client, cosmos => cosmos.DefaultDatabase = "ProjDb");
+
+        options1.ProjectionStorage.ShouldNotBeNull();
+        options1.ProjectionStorage.ShouldBeOfType<CosmosProjectionStorageProvider>();
+
+        var options2 = new StoreOptions();
+        options2.UseCosmosProjections(DummyConnectionString, cosmos => cosmos.DefaultDatabase = "ProjDb2");
+        options2.ProjectionStorage.ShouldNotBeNull();
+        options2.ProjectionStorage.ShouldBeOfType<CosmosProjectionStorageProvider>();
+    }
+
+    [Fact]
     public void UseCosmos_Validates_Null_And_Empty_Arguments()
     {
         var client = Substitute.For<CosmosClient>();
@@ -176,5 +224,23 @@ public sealed class ServiceCollectionExtensionsTests
         Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmos(client, cosmosOptions));
         Should.Throw<ArgumentNullException>(() => validOptions.UseCosmos((CosmosClient)null!, cosmosOptions));
         Should.Throw<ArgumentNullException>(() => validOptions.UseCosmos(client, (CosmosStorageOptions)null!));
+
+        // UseCosmosDocuments validations
+        Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmosDocuments(client));
+        Should.Throw<ArgumentNullException>(() => validOptions.UseCosmosDocuments((CosmosClient)null!));
+        Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmosDocuments(DummyConnectionString));
+        Should.Throw<ArgumentException>(() => validOptions.UseCosmosDocuments(""));
+
+        // UseCosmosEvents validations
+        Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmosEvents(client));
+        Should.Throw<ArgumentNullException>(() => validOptions.UseCosmosEvents((CosmosClient)null!));
+        Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmosEvents(DummyConnectionString));
+        Should.Throw<ArgumentException>(() => validOptions.UseCosmosEvents(""));
+
+        // UseCosmosProjections validations
+        Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmosProjections(client));
+        Should.Throw<ArgumentNullException>(() => validOptions.UseCosmosProjections((CosmosClient)null!));
+        Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmosProjections(DummyConnectionString));
+        Should.Throw<ArgumentException>(() => validOptions.UseCosmosProjections(""));
     }
 }

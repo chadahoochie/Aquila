@@ -134,6 +134,16 @@ public sealed class CosmosProjectionThroughputOptimizationTests
     {
         var projOptions = new ProjectionStorageOptions();
 
+        projOptions.WithManualThroughput(500);
+        projOptions.Throughput.ShouldNotBeNull();
+        projOptions.Throughput.IsAutoscale.ShouldBeFalse();
+        projOptions.Throughput.ManualThroughput.ShouldBe(500);
+
+        projOptions.WithAutoscaleThroughput(5000);
+        projOptions.Throughput.ShouldNotBeNull();
+        projOptions.Throughput.IsAutoscale.ShouldBeTrue();
+        projOptions.Throughput.AutoscaleMaxThroughput.ShouldBe(5000);
+
         projOptions.ToContainer("Projections", "CustomDB", ThroughputSettings.Manual(800));
         projOptions.Throughput.ShouldNotBeNull();
         projOptions.Throughput.IsAutoscale.ShouldBeFalse();

@@ -11,9 +11,11 @@
   <Folder Name="/src/">
     <Project Path="src/Aquila.Core/Aquila.Core.csproj" />
     <Project Path="src/Aquila.Cosmos/Aquila.Cosmos.csproj" />
+    <Project Path="src/Aquila.Redis/Aquila.Redis.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Aquila.Core.Tests/Aquila.Core.Tests.csproj" />
     <Project Path="tests/Aquila.Cosmos.Tests/Aquila.Cosmos.Tests.csproj" />
+    <Project Path="tests/Aquila.Redis.Tests/Aquila.Redis.Tests.csproj" />
   </Folder>
 </Solution>

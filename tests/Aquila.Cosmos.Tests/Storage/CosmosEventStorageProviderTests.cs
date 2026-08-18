@@ -438,4 +438,167 @@ public sealed class CosmosEventStorageProviderTests
         snapshotMissing.ShouldBeNull();
         versionMissing.ShouldBe(0);
     }
+
+    [Fact]
+    public void SingleContainer_Constructor_InitializesCorrectly()
+    {
+        var provider = new CosmosEventStorageProvider(_mockEventContainer);
+        provider.ShouldNotBeNull();
+        provider.ProviderName.ShouldBe("AzureCosmosDB");
+    }
+
+    [Fact]
+    public async Task InitializeSequenceAsync_QueriesMaxGlobalSequence()
+    {
+        var iterator = Substitute.For<FeedIterator<long?>>();
+        var page = Substitute.For<FeedResponse<long?>>();
+        page.GetEnumerator().Returns(new List<long?> { 42L, 100L }.GetEnumerator());
+        iterator.HasMoreResults.Returns(true, false);
+        iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        _mockEventContainer.GetItemQueryIterator<long?>(Arg.Any<QueryDefinition>()).Returns(iterator);
+
+        await _provider.InitializeSequenceAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task AppendEventsAsync_FallbacksToSequential_WhenBatchThrowsNotSupportedException()
+    {
+        var streamId = "stream-fallback-seq";
+        var notFoundEx = new CosmosException("Not Found", HttpStatusCode.NotFound, 0, "act-1", 0);
+
+        _mockEventContainer.ReadItemAsync<CosmosDocumentEnvelope<EventStreamHeader>>(
+            $"$stream_{streamId}",
+            CosmosPartitionKeyHelper.CreatePartitionKey(streamId),
+            cancellationToken: Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<ItemResponse<CosmosDocumentEnvelope<EventStreamHeader>>>(notFoundEx));
+
+        _mockEventContainer.CreateTransactionalBatch(Arg.Any<PartitionKey>())
+            .Returns(_ => throw new NotSupportedException("Batch not supported"));
+
+        var evt = new EventEnvelope<TestEventPayload> { StreamId = streamId, Data = new TestEventPayload("ord-seq", 30m) };
+
+        await _provider.AppendEventsAsync(streamId, new[] { evt }, expectedVersion: 0, ct: TestContext.Current.CancellationToken);
+
+        await _mockEventContainer.Received().UpsertItemAsync(
+            Arg.Is<CosmosDocumentEnvelope<object>>(d => d.DocType == "$event"),
+            Arg.Any<PartitionKey>(),
+            cancellationToken: Arg.Any<CancellationToken>());
+
+        await _mockEventContainer.Received().UpsertItemAsync(
+            Arg.Is<CosmosDocumentEnvelope<EventStreamHeader>>(d => d.DocType == "$stream_header"),
+            Arg.Any<PartitionKey>(),
+            cancellationToken: Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AppendEventsAsync_FallbacksToSequential_WhenBatchReturnsInternalServerError()
+    {
+        var streamId = "stream-fallback-500";
+        var notFoundEx = new CosmosException("Not Found", HttpStatusCode.NotFound, 0, "act-1", 0);
+
+        _mockEventContainer.ReadItemAsync<CosmosDocumentEnvelope<EventStreamHeader>>(
+            $"$stream_{streamId}",
+            CosmosPartitionKeyHelper.CreatePartitionKey(streamId),
+            cancellationToken: Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<ItemResponse<CosmosDocumentEnvelope<EventStreamHeader>>>(notFoundEx));
+
+        var batch = Substitute.For<TransactionalBatch>();
+        var batchResponse = Substitute.For<TransactionalBatchResponse>();
+        batchResponse.IsSuccessStatusCode.Returns(false);
+        batchResponse.StatusCode.Returns(HttpStatusCode.InternalServerError);
+
+        batch.ExecuteAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(batchResponse));
+        _mockEventContainer.CreateTransactionalBatch(Arg.Any<PartitionKey>()).Returns(batch);
+
+        var evt = new EventEnvelope<TestEventPayload> { StreamId = streamId, Data = new TestEventPayload("ord-500", 30m) };
+
+        await _provider.AppendEventsAsync(streamId, new[] { evt }, expectedVersion: 0, ct: TestContext.Current.CancellationToken);
+
+        await _mockEventContainer.Received().UpsertItemAsync(
+            Arg.Is<CosmosDocumentEnvelope<object>>(d => d.DocType == "$event"),
+            Arg.Any<PartitionKey>(),
+            cancellationToken: Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task FetchGlobalEventsAsync_FallbacksToUnsortedQuery_WhenSortedQueryFails()
+    {
+        var evt = new EventEnvelope<TestEventPayload> { StreamId = "s-fb", Version = 1, TenantId = "t1", GlobalSequence = 55, Data = new TestEventPayload("o-fb", 10m) };
+        var env = new CosmosDocumentEnvelope<object> { Id = "e-fb", PartitionKey = "s-fb", TenantId = "t1", Data = evt };
+
+        var badRequestEx = new CosmosException("Bad Request", HttpStatusCode.BadRequest, 0, "act-1", 0);
+
+        var sortedIterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        sortedIterator.HasMoreResults.Returns(true);
+        sortedIterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException<FeedResponse<CosmosDocumentEnvelope<object>>>(badRequestEx));
+
+        // Fallback call returns iterator
+        var fallbackIterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<object>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<object>> { env }.GetEnumerator());
+        fallbackIterator.HasMoreResults.Returns(true, false);
+        fallbackIterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Is<QueryDefinition>(q => q.QueryText.Contains("ORDER BY")),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(sortedIterator);
+
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Is<QueryDefinition>(q => !q.QueryText.Contains("ORDER BY")),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(fallbackIterator);
+
+        var events = await _provider.FetchGlobalEventsAsync(fromGlobalSequence: 0, batchSize: 10, tenantId: "t1", ct: TestContext.Current.CancellationToken);
+        events.Count.ShouldBe(1);
+        events[0].GlobalSequence.ShouldBe(55);
+    }
+
+    [Fact]
+    public async Task GetStreamHeaderAsync_UsesQueryFallback_WhenTargetIdContainsSlash_OrCosmosException()
+    {
+        var streamId = "dept/stream-1"; // contains slash
+        var header = new EventStreamHeader { StreamId = streamId, Version = 3, TenantId = "default" };
+        var env = new CosmosDocumentEnvelope<EventStreamHeader> { Id = $"$stream_{streamId}", PartitionKey = streamId, TenantId = "default", Data = header };
+
+        var iterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<EventStreamHeader>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<EventStreamHeader>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<EventStreamHeader>> { env }.GetEnumerator());
+        iterator.HasMoreResults.Returns(true, false);
+        iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<EventStreamHeader>>(
+            Arg.Any<QueryDefinition>(),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(iterator);
+
+        var result = await _provider.GetStreamHeaderAsync(streamId, ct: TestContext.Current.CancellationToken);
+        result.ShouldNotBeNull();
+        result.Version.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_UsesQueryFallback_WhenTargetIdContainsSlash_OrCosmosException()
+    {
+        var streamId = "dept/snap-1"; // contains slash
+        var state = new TestAggregateState { Id = streamId, Balance = 300m };
+        var env = new CosmosDocumentEnvelope<TestAggregateState> { Id = $"$snapshot_{streamId}", PartitionKey = streamId, TenantId = "default", Version = "7", Data = state };
+
+        var iterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<TestAggregateState>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<TestAggregateState>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<TestAggregateState>> { env }.GetEnumerator());
+        iterator.HasMoreResults.Returns(true, false);
+        iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        _mockSnapshotContainer.GetItemQueryIterator<CosmosDocumentEnvelope<TestAggregateState>>(
+            Arg.Any<QueryDefinition>(),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(iterator);
+
+        var (snapshot, version) = await _provider.GetSnapshotAsync<TestAggregateState>(streamId, ct: TestContext.Current.CancellationToken);
+        snapshot.ShouldNotBeNull();
+        snapshot.Balance.ShouldBe(300m);
+        version.ShouldBe(7);
+    }
 }
