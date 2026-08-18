@@ -152,7 +152,7 @@ public sealed class ProjectionRegistration
     private readonly List<IProjection> _projections = new();
     private readonly ConcurrentDictionary<Type, IProjection?> _typeCache = new();
 
-    public List<IProjection> Projections => _projections;
+    public IReadOnlyList<IProjection> Projections => _projections;
 
     public void Add<TProjection>(ProjectionLifecycle lifecycle = ProjectionLifecycle.Inline) where TProjection : IProjection, new()
     {

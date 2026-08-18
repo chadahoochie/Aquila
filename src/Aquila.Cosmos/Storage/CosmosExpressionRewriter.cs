@@ -9,7 +9,7 @@ namespace Aquila.Cosmos.Storage;
 /// Expression visitor that rewrites predicates targeting <see cref="DocumentEnvelope{T}"/>
 /// into equivalent expressions targeting <see cref="CosmosDocumentEnvelope{T}"/>.
 /// </summary>
-public class CosmosExpressionRewriter : ExpressionVisitor
+public sealed class CosmosExpressionRewriter : ExpressionVisitor
 {
     // Performance Optimization: Cache property lookups and rewritten expression trees to avoid
     // reflection GetProperty() overhead and AST allocations on high-frequency Cosmos query translations.

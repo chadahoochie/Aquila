@@ -7,7 +7,7 @@ namespace Aquila.Core.Queries;
 
 public static class CompiledQueryCache
 {
-    private static readonly ConcurrentDictionary<object, object> _cache = new();
+    private static readonly ConcurrentDictionary<Type, object> _cache = new();
 
     public static TResult Execute<TDoc, TResult>(IQueryable<TDoc> queryable, ICompiledQuery<TDoc, TResult> query) where TDoc : class
     {
@@ -21,14 +21,14 @@ public static class CompiledQueryCache
             var expression = query.QueryIs();
             if (expression == null)
             {
-                throw new InvalidOperationException($"QueryIs() returned null for compiled query type '{((Type)t).FullName}'.");
+                throw new InvalidOperationException($"QueryIs() returned null for compiled query type '{t.FullName}'.");
             }
 
             var queryableParam = expression.Parameters[0];
             var queryParam = Expression.Parameter(typeof(object), "query");
-            var typedQueryParam = Expression.Convert(queryParam, (Type)t);
+            var typedQueryParam = Expression.Convert(queryParam, t);
 
-            var rewriter = new QueryParameterBindingVisitor(query, (Type)t, typedQueryParam);
+            var rewriter = new QueryParameterBindingVisitor(query, t, typedQueryParam);
             var newBody = rewriter.Visit(expression.Body);
 
             var lambda = Expression.Lambda<Func<IQueryable<TDoc>, object, TResult>>(newBody, queryableParam, queryParam);
@@ -57,7 +57,7 @@ public static class CompiledQueryCache
         var singleOrderBy = query.OrderBy();
         if (singleOrderBy != null)
         {
-            return new[] { new SortDescriptor(singleOrderBy, query.SortOrder) };
+            return [new SortDescriptor(singleOrderBy, query.SortOrder)];
         }
 
         return null;
@@ -68,7 +68,7 @@ public static class CompiledQueryCache
         _cache.Clear();
     }
 
-    private class QueryParameterBindingVisitor : ExpressionVisitor
+    private sealed class QueryParameterBindingVisitor : ExpressionVisitor
     {
         private readonly object _originalQueryInstance;
         private readonly Type _queryType;

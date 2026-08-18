@@ -15,7 +15,7 @@ public interface IProjectionCheckpointStore
 /// <summary>
 /// Persistence implementation of <see cref="IProjectionCheckpointStore"/> using <see cref="IDocumentStorageProvider"/>.
 /// </summary>
-public class DocumentStorageProjectionCheckpointStore : IProjectionCheckpointStore
+public sealed class DocumentStorageProjectionCheckpointStore : IProjectionCheckpointStore
 {
     private readonly IDocumentStorageProvider _storageProvider;
 
@@ -58,7 +58,7 @@ public class DocumentStorageProjectionCheckpointStore : IProjectionCheckpointSto
 /// <summary>
 /// In-memory implementation of <see cref="IProjectionCheckpointStore"/> for testing and lightweight deployments.
 /// </summary>
-public class InMemoryProjectionCheckpointStore : IProjectionCheckpointStore
+public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointStore
 {
     private readonly ConcurrentDictionary<string, ProjectionCheckpoint> _checkpoints = new();
 

@@ -89,10 +89,21 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
         ArgumentNullException.ThrowIfNull(documentStore);
         ArgumentNullException.ThrowIfNull(events);
 
-        var groups = events
-            .GroupBy(e => e.StreamId)
-            .Where(g => !string.IsNullOrWhiteSpace(g.Key))
-            .ToList();
+        if (events.Count == 0) return;
+
+        var groups = new Dictionary<string, List<IEvent>>();
+        for (int i = 0; i < events.Count; i++)
+        {
+            var evt = events[i];
+            if (string.IsNullOrWhiteSpace(evt.StreamId)) continue;
+
+            if (!groups.TryGetValue(evt.StreamId, out var list))
+            {
+                list = new List<IEvent>();
+                groups[evt.StreamId] = list;
+            }
+            list.Add(evt);
+        }
 
         if (groups.Count == 0) return;
 
@@ -105,14 +116,16 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
         await Parallel.ForEachAsync(groups, parallelOptions, async (group, token) =>
         {
             using var session = (DocumentSession)documentStore.OpenSession();
-            var streamId = group.Key!;
+            var streamId = group.Key;
             var existingAggregate = await session.LoadAsync<TAggregate>(streamId, streamId, token).ConfigureAwait(false)
                                      ?? new TAggregate();
 
-            var orderedEvents = group.OrderBy(e => e.GlobalSequence);
-            foreach (var evt in orderedEvents)
+            var streamEvents = group.Value;
+            streamEvents.Sort(static (a, b) => a.GlobalSequence.CompareTo(b.GlobalSequence));
+
+            for (int i = 0; i < streamEvents.Count; i++)
             {
-                ApplyEvent(evt, existingAggregate);
+                ApplyEvent(streamEvents[i], existingAggregate);
             }
 
             var envelope = new DocumentEnvelope<TAggregate>

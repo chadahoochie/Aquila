@@ -7,7 +7,7 @@ namespace Aquila.Core.Patching;
 /// Default implementation of IPatchExpression to parse property lambda expressions into JSON pointer paths
 /// and collect PatchOperationData.
 /// </summary>
-public class PatchExpression<T> : IPatchExpression<T>
+public sealed class PatchExpression<T> : IPatchExpression<T>
 {
     public List<PatchOperationData> Operations { get; } = new();
 

@@ -102,10 +102,23 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
         ArgumentNullException.ThrowIfNull(documentStore);
         ArgumentNullException.ThrowIfNull(events);
 
-        var groups = events
-            .GroupBy(e => GetIdentity(e)?.ToString())
-            .Where(g => !string.IsNullOrWhiteSpace(g.Key))
-            .ToList();
+        if (events.Count == 0) return;
+
+        var groups = new Dictionary<string, List<IEvent>>();
+        for (int i = 0; i < events.Count; i++)
+        {
+            var evt = events[i];
+            var idObj = GetIdentity(evt);
+            var identity = idObj?.ToString();
+            if (string.IsNullOrWhiteSpace(identity)) continue;
+
+            if (!groups.TryGetValue(identity, out var list))
+            {
+                list = new List<IEvent>();
+                groups[identity] = list;
+            }
+            list.Add(evt);
+        }
 
         if (groups.Count == 0) return;
 
@@ -118,11 +131,12 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
         await Parallel.ForEachAsync(groups, parallelOptions, async (group, token) =>
         {
             using var session = (DocumentSession)documentStore.OpenSession();
-            var orderedEvents = group.OrderBy(e => e.GlobalSequence);
+            var streamEvents = group.Value;
+            streamEvents.Sort(static (a, b) => a.GlobalSequence.CompareTo(b.GlobalSequence));
 
-            foreach (var evt in orderedEvents)
+            for (int i = 0; i < streamEvents.Count; i++)
             {
-                await ProcessEventAsync(session, evt, token).ConfigureAwait(false);
+                await ProcessEventAsync(session, streamEvents[i], token).ConfigureAwait(false);
             }
 
             await session.SaveChangesAsync(token).ConfigureAwait(false);

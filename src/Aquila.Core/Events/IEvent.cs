@@ -34,7 +34,7 @@ public interface IEvent<out T> : IEvent where T : class
 /// <summary>
 /// Default implementation of an event envelope.
 /// </summary>
-public class EventEnvelope<T> : IEvent<T> where T : class
+public sealed class EventEnvelope<T> : IEvent<T> where T : class
 {
     private IReadOnlyDictionary<string, object>? _headers;
 

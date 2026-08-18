@@ -9,7 +9,7 @@ namespace Aquila.Core.Storage;
 /// <summary>
 /// Default implementation of ISqlExpressionTranslator using ExpressionVisitor to produce parameterized SQL query clauses.
 /// </summary>
-public class DefaultSqlExpressionTranslator : ExpressionVisitor, ISqlExpressionTranslator
+public sealed class DefaultSqlExpressionTranslator : ExpressionVisitor, ISqlExpressionTranslator
 {
     [ThreadStatic]
     private static StringBuilder? t_builder;
@@ -44,18 +44,18 @@ public class DefaultSqlExpressionTranslator : ExpressionVisitor, ISqlExpressionT
     public string TranslateOrderBy<T>(Expression<Func<DocumentEnvelope<T>, object?>> orderBy, SortOrder direction = SortOrder.Ascending)
     {
         ArgumentNullException.ThrowIfNull(orderBy);
-        return TranslateOrderBy(new[] { new SortDescriptor(orderBy, direction) });
+        return TranslateOrderBy([new SortDescriptor(orderBy, direction)]);
     }
 
     public string TranslateOrderBy(IEnumerable<SortDescriptor> orderings)
     {
         ArgumentNullException.ThrowIfNull(orderings);
-        var orderList = orderings.Where(o => o != null && o.KeySelector != null).ToList();
-        if (orderList.Count == 0) return string.Empty;
+        List<string>? clauses = null;
 
-        var clauses = new List<string>(orderList.Count);
-        foreach (var ord in orderList)
+        foreach (var ord in orderings)
         {
+            if (ord == null || ord.KeySelector == null) continue;
+
             var param = ord.KeySelector.Parameters[0];
             var body = ord.KeySelector.Body;
             while (body is UnaryExpression u && (u.NodeType == ExpressionType.Convert || u.NodeType == ExpressionType.ConvertChecked))
@@ -67,6 +67,7 @@ public class DefaultSqlExpressionTranslator : ExpressionVisitor, ISqlExpressionT
             {
                 var path = GetMemberPath(memberExpr, param);
                 var dirSql = ord.Direction == SortOrder.Descending ? "DESC" : "ASC";
+                clauses ??= new List<string>();
                 clauses.Add($"{path} {dirSql}");
             }
             else
@@ -75,7 +76,7 @@ public class DefaultSqlExpressionTranslator : ExpressionVisitor, ISqlExpressionT
             }
         }
 
-        return clauses.Count > 0 ? "ORDER BY " + string.Join(", ", clauses) : string.Empty;
+        return clauses is { Count: > 0 } ? "ORDER BY " + string.Join(", ", clauses) : string.Empty;
     }
 
     protected override Expression VisitBinary(BinaryExpression node)

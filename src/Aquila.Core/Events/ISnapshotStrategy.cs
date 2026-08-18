@@ -16,7 +16,7 @@ public interface ISnapshotStrategy<TAggregate> where TAggregate : class
 /// Default threshold-based snapshot strategy.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
-public class DefaultSnapshotStrategy<TAggregate> : ISnapshotStrategy<TAggregate> where TAggregate : class
+public sealed class DefaultSnapshotStrategy<TAggregate> : ISnapshotStrategy<TAggregate> where TAggregate : class
 {
     private readonly int _threshold;
 
