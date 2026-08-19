@@ -27,7 +27,6 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
     private readonly ILogger<CosmosProjectionDaemon>? _logger;
     private readonly ProjectionDaemonOptions _options;
     private readonly ConcurrentDictionary<string, bool> _stoppedProjections = new();
-    private static readonly ConcurrentDictionary<string, Type?> _typeCache = new();
 
     public ProjectionDaemonOptions Options => _options;
 
@@ -390,24 +389,7 @@ public sealed class CosmosProjectionDaemon : BackgroundService, IProjectionDaemo
 
     private static Type? ResolveType(string eventTypeName)
     {
-        if (string.IsNullOrWhiteSpace(eventTypeName)) return null;
-
-        return _typeCache.GetOrAdd(eventTypeName, name =>
-        {
-            var type = Type.GetType(name);
-            if (type != null) return type;
-
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                type = asm.GetType(name);
-                if (type != null) return type;
-
-                type = asm.GetTypes().FirstOrDefault(t => t.Name == name || t.FullName == name);
-                if (type != null) return type;
-            }
-
-            return null;
-        });
+        return CosmosEventTypeResolver.Default.ResolveEventType(eventTypeName);
     }
 
     private List<IProjection> GetActiveAsyncProjections()

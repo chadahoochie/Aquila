@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aquila.Core.Serialization;
 using Aquila.Core.Events;
 
@@ -53,17 +54,31 @@ public sealed class CosmosEventTypeResolver : ICosmosEventTypeResolver
 
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                type = asm.GetType(name);
-                if (type != null) return type;
+                if (asm.IsDynamic) continue;
+
+                try
+                {
+                    type = asm.GetType(name);
+                    if (type != null) return type;
+                }
+                catch
+                {
+                    // Ignore type load or argument errors
+                }
 
                 try
                 {
                     type = asm.GetTypes().FirstOrDefault(t => t.Name == name || t.FullName == name);
                     if (type != null) return type;
                 }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    type = ex.Types.FirstOrDefault(t => t != null && (t.Name == name || t.FullName == name));
+                    if (type != null) return type;
+                }
                 catch
                 {
-                    // Ignore assemblies that throw ReflectionTypeLoadException during type scanning
+                    // Ignore assemblies that throw exceptions during type scanning
                 }
             }
 
