@@ -89,9 +89,13 @@ public sealed class CosmosAdvancedFeaturesTests
         resolver.ResolveEventType("").ShouldBeNull();
         resolver.ResolveEventType("   ").ShouldBeNull();
         resolver.ResolveEventType("NonExistent.Assembly.TypeName").ShouldBeNull();
+        resolver.ResolveEventType("Castle.Proxies.NonExistentProxy").ShouldBeNull();
 
         var resolved = resolver.ResolveEventType(typeof(TestPayload).AssemblyQualifiedName!);
         resolved.ShouldBe(typeof(TestPayload));
+
+        var resolvedByName = resolver.ResolveEventType(nameof(TestPayload));
+        resolvedByName.ShouldBe(typeof(TestPayload));
     }
 
     [Fact]
