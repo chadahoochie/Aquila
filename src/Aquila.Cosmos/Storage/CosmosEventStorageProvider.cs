@@ -83,9 +83,19 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 }
             }
         }
-        catch
+        catch (OperationCanceledException)
         {
-            // Fallback for mocks or scenarios where SQL aggregate iterator isn't configured
+            // Cancellation is the caller's decision, not a seeding failure.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Seeding is best-effort: a mock container or a provider without SQL aggregate support
+            // cannot answer this query. Swallowing silently, however, hands back 0 and re-issues
+            // sequence numbers that already exist, so the failure has to be visible.
+            _logger?.LogWarning(ex,
+                "Could not read MAX(GlobalSequence) from the event container; the global sequence will seed at 0. " +
+                "Events appended by this process may reuse sequence numbers already present in storage.");
         }
 
         return max;
@@ -100,7 +110,9 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         if (eventList.Count == 0) return;
 
         var tenantId = eventList.FirstOrDefault()?.TenantId ?? "default";
-        var header = await GetStreamHeaderAsync(streamId, tenantId, ct);
+        var headerEnvelope = await GetStreamHeaderEnvelopeAsync(streamId, tenantId, ct).ConfigureAwait(false);
+        var header = headerEnvelope?.Data;
+        var headerETag = headerEnvelope?.ETag;
         long currentVersion = header?.Version ?? 0;
 
         if (expectedVersion >= 0 && currentVersion != expectedVersion)
@@ -136,7 +148,10 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                         Data = @evt
                     };
 
-                    batch.UpsertItem(doc);
+                    // CreateItem, not UpsertItem: event ids are deterministic ($event_{stream}_v{n}),
+                    // so a create that collides is precisely the signal that another writer already
+                    // claimed this version. An upsert would silently overwrite their event.
+                    batch.CreateItem(doc);
                 }
 
                 var batchHeader = new EventStreamHeader
@@ -159,7 +174,21 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                     Data = batchHeader
                 };
 
-                batch.UpsertItem(batchHeaderDoc);
+                if (headerETag == null)
+                {
+                    // New stream: two concurrent creators must not both succeed.
+                    batch.CreateItem(batchHeaderDoc);
+                }
+                else
+                {
+                    // Existing stream: the batch commits only if the header is still at the version
+                    // we validated against, making the whole append conditional rather than atomic-only.
+                    // Upsert rather than Replace: Replace takes the id as a separate argument that
+                    // Cosmos puts in the request path, and stream ids legitimately contain '/'
+                    // (for example "orders/ord-1"), which makes the path invalid. Upsert carries the
+                    // id in the document body, and honours If-Match just the same.
+                    batch.UpsertItem(batchHeaderDoc, new TransactionalBatchItemRequestOptions { IfMatchEtag = headerETag });
+                }
 
                 using var response = await batch.ExecuteAsync(ct).ConfigureAwait(false);
                 if (response != null)
@@ -236,7 +265,15 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 Data = @evt
             };
 
-            await EventContainer.UpsertItemAsync(doc, partitionKey, cancellationToken: ct);
+            try
+            {
+                await EventContainer.CreateItemAsync(doc, partitionKey, cancellationToken: ct).ConfigureAwait(false);
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                RecordCharge(ex.RequestCharge);
+                throw new AquilaConcurrencyException(streamId, expectedVersion.ToString(), currentVersion.ToString());
+            }
         }
 
         var fallbackHeader = new EventStreamHeader
@@ -259,7 +296,29 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
             Data = fallbackHeader
         };
 
-        await EventContainer.UpsertItemAsync(fallbackHeaderDoc, partitionKey, cancellationToken: ct);
+        try
+        {
+            if (headerETag == null)
+            {
+                await EventContainer.CreateItemAsync(fallbackHeaderDoc, partitionKey, cancellationToken: ct).ConfigureAwait(false);
+            }
+            else
+            {
+                // Upsert, not Replace: see the batch path above -- stream ids may contain '/', which
+                // Replace cannot express because it puts the id in the request path.
+                await EventContainer.UpsertItemAsync(
+                    fallbackHeaderDoc,
+                    partitionKey,
+                    new ItemRequestOptions { IfMatchEtag = headerETag },
+                    ct).ConfigureAwait(false);
+            }
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict ||
+                                         ex.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+        {
+            RecordCharge(ex.RequestCharge);
+            throw new AquilaConcurrencyException(streamId, expectedVersion.ToString(), currentVersion.ToString());
+        }
     }
 
     public async Task<IReadOnlyList<IEvent>> FetchEventsAsync(string streamId, string? tenantId = null, long fromVersion = 0, CancellationToken ct = default)
@@ -528,6 +587,17 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
 
     public async Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default)
     {
+        var envelope = await GetStreamHeaderEnvelopeAsync(streamId, tenantId, ct).ConfigureAwait(false);
+        return envelope?.Data;
+    }
+
+    /// <summary>
+    /// Reads the stream header envelope rather than just its payload, so the append path can carry
+    /// the document's <c>_etag</c> into an If-Match precondition. Without the ETag the version check
+    /// is a check-then-act: two writers both observe version N and both write N+1.
+    /// </summary>
+    private async Task<CosmosDocumentEnvelope<EventStreamHeader>?> GetStreamHeaderEnvelopeAsync(string streamId, string? tenantId = null, CancellationToken ct = default)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
 
         var targetId = $"$stream_{streamId}";
@@ -551,7 +621,9 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                 return null;
             }
 
-            return resp.Resource.Data;
+            // ReadItemAsync surfaces the ETag on the response; the deserialized body may not carry it.
+            resp.Resource.ETag ??= resp.ETag;
+            return resp.Resource;
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
@@ -565,7 +637,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
     }
 
-    private async Task<EventStreamHeader?> QueryStreamHeaderAsync(string streamId, string targetId, string? tenantId, CancellationToken ct)
+    private async Task<CosmosDocumentEnvelope<EventStreamHeader>?> QueryStreamHeaderAsync(string streamId, string targetId, string? tenantId, CancellationToken ct)
     {
         var queryDef = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
             .WithParameter("@id", targetId);
@@ -589,7 +661,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
                     {
                         return null;
                     }
-                    return item.Data;
+                    return item;
                 }
             }
         }

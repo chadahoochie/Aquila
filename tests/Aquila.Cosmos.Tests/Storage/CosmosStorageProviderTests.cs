@@ -409,12 +409,12 @@ public sealed class CosmosStorageProviderTests
     public async Task AppendEventsAsync_EarlyReturn_On_EmptyEvents_And_NegativeExpectedVersion()
     {
         await _provider.AppendEventsAsync("s-empty", Array.Empty<IEvent>(), expectedVersion: 0, ct: TestContext.Current.CancellationToken);
-        await _mockContainer.DidNotReceiveWithAnyArgs().UpsertItemAsync<object>(default!, default, cancellationToken: TestContext.Current.CancellationToken);
+        await _mockContainer.DidNotReceiveWithAnyArgs().CreateItemAsync<object>(default!, default, cancellationToken: TestContext.Current.CancellationToken);
 
         var evt = new EventEnvelope<object> { StreamId = "s-neg", Version = 0, TenantId = "t1", Data = new MockDoc("1", "N") };
         await _provider.AppendEventsAsync("s-neg", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
 
-        await _mockContainer.Received().UpsertItemAsync(
+        await _mockContainer.Received().CreateItemAsync(
             Arg.Is<CosmosDocumentEnvelope<object>>(e => e.PartitionKey == "s-neg"),
             new PartitionKey("s-neg"),
             cancellationToken: Arg.Any<CancellationToken>());
@@ -443,8 +443,10 @@ public sealed class CosmosStorageProviderTests
         await _provider.AppendEventsAsync("s-batch", new[] { evt }, expectedVersion: -1, ct: TestContext.Current.CancellationToken);
 
         _mockContainer.Received(1).CreateTransactionalBatch(new PartitionKey("s-batch"));
-        mockBatch.Received().UpsertItem(Arg.Is<CosmosDocumentEnvelope<object>>(e => e.PartitionKey == "s-batch"));
-        mockBatch.Received().UpsertItem(Arg.Is<CosmosDocumentEnvelope<EventStreamHeader>>(e => e.PartitionKey == "s-batch"));
+        // Events are created, never upserted: a collision on the deterministic event id is the
+        // concurrency signal. The stream is new here, so its header is created too.
+        mockBatch.Received().CreateItem(Arg.Is<CosmosDocumentEnvelope<object>>(e => e.PartitionKey == "s-batch"));
+        mockBatch.Received().CreateItem(Arg.Is<CosmosDocumentEnvelope<EventStreamHeader>>(e => e.PartitionKey == "s-batch"));
         await mockBatch.Received(1).ExecuteAsync(Arg.Any<CancellationToken>());
     }
 

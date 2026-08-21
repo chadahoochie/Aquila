@@ -135,8 +135,8 @@ public sealed class CosmosEventStorageProviderTests
         evt1.GlobalSequence.ShouldBeGreaterThan(0);
         evt2.GlobalSequence.ShouldBeGreaterThan(evt1.GlobalSequence);
 
-        batch.Received(2).UpsertItem(Arg.Is<CosmosDocumentEnvelope<object>>(e => e.DocType == "$event"));
-        batch.Received(1).UpsertItem(Arg.Is<CosmosDocumentEnvelope<EventStreamHeader>>(e => e.DocType == "$stream_header"));
+        batch.Received(2).CreateItem(Arg.Is<CosmosDocumentEnvelope<object>>(e => e.DocType == "$event"));
+        batch.Received(1).CreateItem(Arg.Is<CosmosDocumentEnvelope<EventStreamHeader>>(e => e.DocType == "$stream_header"));
         _provider.LastRequestCharge.ShouldBe(8.5);
     }
 
@@ -480,12 +480,12 @@ public sealed class CosmosEventStorageProviderTests
 
         await _provider.AppendEventsAsync(streamId, new[] { evt }, expectedVersion: 0, ct: TestContext.Current.CancellationToken);
 
-        await _mockEventContainer.Received().UpsertItemAsync(
+        await _mockEventContainer.Received().CreateItemAsync(
             Arg.Is<CosmosDocumentEnvelope<object>>(d => d.DocType == "$event"),
             Arg.Any<PartitionKey>(),
             cancellationToken: Arg.Any<CancellationToken>());
 
-        await _mockEventContainer.Received().UpsertItemAsync(
+        await _mockEventContainer.Received().CreateItemAsync(
             Arg.Is<CosmosDocumentEnvelope<EventStreamHeader>>(d => d.DocType == "$stream_header"),
             Arg.Any<PartitionKey>(),
             cancellationToken: Arg.Any<CancellationToken>());
@@ -515,7 +515,7 @@ public sealed class CosmosEventStorageProviderTests
 
         await _provider.AppendEventsAsync(streamId, new[] { evt }, expectedVersion: 0, ct: TestContext.Current.CancellationToken);
 
-        await _mockEventContainer.Received().UpsertItemAsync(
+        await _mockEventContainer.Received().CreateItemAsync(
             Arg.Is<CosmosDocumentEnvelope<object>>(d => d.DocType == "$event"),
             Arg.Any<PartitionKey>(),
             cancellationToken: Arg.Any<CancellationToken>());
