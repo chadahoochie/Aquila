@@ -79,7 +79,7 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
                 Data = doc
             };
 
-            await session.ProjectionStorage.UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
+            await session.StorageFor<TDoc>().UpsertDocumentAsync(envelope, ct).ConfigureAwait(false);
             // Performance Optimization: Bypass IdentityMap tracking overhead in lightweight projection sessions
             if (session.TrackingMode != TrackingMode.Lightweight)
             {
@@ -88,7 +88,7 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
         }
         else
         {
-            await session.ProjectionStorage.DeleteDocumentAsync<TDoc>(docId, pk, ct).ConfigureAwait(false);
+            await session.StorageFor<TDoc>().DeleteDocumentAsync<TDoc>(docId, pk, ct).ConfigureAwait(false);
             // Performance Optimization: Bypass IdentityMap untracking overhead in lightweight projection sessions
             if (session.TrackingMode != TrackingMode.Lightweight)
             {

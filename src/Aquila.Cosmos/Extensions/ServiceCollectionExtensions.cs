@@ -159,6 +159,12 @@ public static class ServiceCollectionExtensions
         var options = new StoreOptions();
         configure(options);
 
+        // Freeze here rather than leaving it to the DocumentStore factory below, which does not run
+        // until something first resolves IDocumentStore. Freezing at registration means the polyglot
+        // inline-projection guard reports a misconfiguration during startup, where it is actionable,
+        // instead of on the first request that happens to open a session.
+        options.Freeze();
+
         services.AddSingleton(options);
         services.AddSingleton<IDocumentStore>(sp => new DocumentStore(options));
 

@@ -365,7 +365,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             .GetMethod(nameof(IDocumentStorageProvider.UpsertDocumentAsync))!
             .MakeGenericMethod(proj.AggregateType);
 
-        var targetStorage = Options.IsProjectionReadModel(proj.AggregateType) ? Options.ProjectionStorage : DocumentStorage;
+        var targetStorage = Options.GetStorageFor(proj.AggregateType);
         var upsertTask = (Task)upsertMethod.Invoke(targetStorage, new object[] { envelope, ct })!;
         await upsertTask.ConfigureAwait(false);
 

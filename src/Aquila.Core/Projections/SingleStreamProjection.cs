@@ -138,7 +138,7 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
                 Data = existingAggregate
             };
 
-            await documentStore.Options.ProjectionStorage.UpsertDocumentAsync(envelope, token).ConfigureAwait(false);
+            await documentStore.Options.GetStorageFor(typeof(TAggregate)).UpsertDocumentAsync(envelope, token).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
 

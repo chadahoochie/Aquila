@@ -40,12 +40,27 @@ public class TripartiteStorageRoutingTests
         }
     }
 
+    public class RunningTotalProjection : SingleStreamProjection<OrderSummaryReadModel>
+    {
+        public RunningTotalProjection()
+        {
+            Lifecycle = ProjectionLifecycle.Async;
+            CreateEvent<OrderPlaced>(e => new OrderSummaryReadModel { Id = e.OrderId, TotalAmount = e.Amount });
+            ProjectEvent<OrderPlaced>((e, doc) =>
+            {
+                doc.Id = e.OrderId;
+                doc.TotalAmount += e.Amount;
+            });
+        }
+    }
+
     private sealed class TrackingStorageProvider : IDocumentStorageProvider, IProjectionStorageProvider
     {
         private readonly InMemoryStorageProvider _inner = new();
         public readonly List<string> ReadCalls = new();
         public readonly List<string> QueryCalls = new();
         public readonly List<StorageOperation> ExecutedBatchOperations = new();
+        public readonly List<string> ExecutedUpserts = new();
 
         public string ProviderName { get; }
 
@@ -71,8 +86,11 @@ public class TripartiteStorageRoutingTests
             return _inner.QueryPagedDocumentsAsync(predicate, options, ct);
         }
 
-        public Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class =>
-            _inner.UpsertDocumentAsync(envelope, ct);
+        public Task UpsertDocumentAsync<T>(DocumentEnvelope<T> envelope, CancellationToken ct = default) where T : class
+        {
+            ExecutedUpserts.Add($"{typeof(T).Name}:{envelope.Id}");
+            return _inner.UpsertDocumentAsync(envelope, ct);
+        }
 
         public Task DeleteDocumentAsync<T>(string id, string partitionKey, CancellationToken ct = default) where T : class =>
             _inner.DeleteDocumentAsync<T>(id, partitionKey, ct);
@@ -176,5 +194,95 @@ public class TripartiteStorageRoutingTests
         projStorage.ExecutedBatchOperations.Count.ShouldBe(1);
         projStorage.ExecutedBatchOperations[0].Id.ShouldBe("ORD-200");
         projStorage.ExecutedBatchOperations[0].DocType.ShouldBe(nameof(OrderSummaryReadModel));
+    }
+
+    [Fact]
+    public async Task AsyncProjection_WritesAndReadsThroughTheSameStore_WhenInitializeAsyncWasNeverCalled()
+    {
+        // Regression for the routing gap: the documented AddAquila setup never calls
+        // InitializeAsync, which used to be the only caller of Freeze(). With an empty routing
+        // registry, LoadAsync resolved to DocumentStorage while the projection writer targeted
+        // ProjectionStorage unconditionally -- so the read model was written to one store and
+        // read from another, and LoadAsync returned null forever.
+        var docStorage = new TrackingStorageProvider("CosmosDocs");
+        var projStorage = new TrackingStorageProvider("RedisProjections");
+        var eventStorage = new InMemoryStorageProvider();
+
+        var options = new StoreOptions();
+        options.DocumentStorage = docStorage;
+        options.ProjectionStorage = projStorage;
+        options.EventStorage = eventStorage;
+        options.Projections.Add<OrderSummaryProjection>(ProjectionLifecycle.Async);
+
+        // Deliberately no InitializeAsync() -- this is what AddAquila does.
+        using var store = new DocumentStore(options);
+
+        var projection = (OrderSummaryProjection)options.Projections.Projections.Single();
+        await projection.DispatchBatchAsync(
+            store,
+            new IEvent[]
+            {
+                new EventEnvelope<OrderPlaced>
+                {
+                    StreamId = "ORD-77",
+                    Version = 1,
+                    GlobalSequence = 1,
+                    Data = new OrderPlaced { OrderId = "ORD-77", Amount = 42.50m }
+                }
+            },
+            maxConcurrency: 1,
+            TestContext.Current.CancellationToken);
+
+        projStorage.ExecutedUpserts.ShouldContain("OrderSummaryReadModel:ORD-77");
+        docStorage.ExecutedUpserts.ShouldNotContain("OrderSummaryReadModel:ORD-77");
+
+        using var session = store.OpenSession();
+        var readModel = await session.LoadAsync<OrderSummaryReadModel>("ORD-77", "ORD-77", TestContext.Current.CancellationToken);
+
+        readModel.ShouldNotBeNull();
+        readModel.TotalAmount.ShouldBe(42.50m);
+    }
+
+    [Fact]
+    public async Task AsyncProjection_AccumulatesAcrossBatches_RatherThanRestartingFromAnEmptyReadModel()
+    {
+        // The consequence of the split above: SingleStreamProjection loads the prior aggregate
+        // through the session before folding in new events. Reading the wrong store yielded a
+        // fresh instance every batch, so accumulating projections silently reset each cycle.
+        var docStorage = new TrackingStorageProvider("CosmosDocs");
+        var projStorage = new TrackingStorageProvider("RedisProjections");
+
+        var options = new StoreOptions();
+        options.DocumentStorage = docStorage;
+        options.ProjectionStorage = projStorage;
+        options.EventStorage = new InMemoryStorageProvider();
+        options.Projections.Add<RunningTotalProjection>(ProjectionLifecycle.Async);
+
+        using var store = new DocumentStore(options);
+        var projection = (RunningTotalProjection)options.Projections.Projections.Single();
+
+        for (int i = 1; i <= 3; i++)
+        {
+            await projection.DispatchBatchAsync(
+                store,
+                new IEvent[]
+                {
+                    new EventEnvelope<OrderPlaced>
+                    {
+                        StreamId = "ORD-88",
+                        Version = i,
+                        GlobalSequence = i,
+                        Data = new OrderPlaced { OrderId = "ORD-88", Amount = 10m }
+                    }
+                },
+                maxConcurrency: 1,
+                TestContext.Current.CancellationToken);
+        }
+
+        using var session = store.OpenSession();
+        var readModel = await session.LoadAsync<OrderSummaryReadModel>("ORD-88", "ORD-88", TestContext.Current.CancellationToken);
+
+        readModel.ShouldNotBeNull();
+        readModel.TotalAmount.ShouldBe(30m, "three batches of 10 must accumulate, not overwrite");
     }
 }
