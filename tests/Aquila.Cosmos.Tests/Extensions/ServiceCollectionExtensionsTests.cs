@@ -243,4 +243,60 @@ public sealed class ServiceCollectionExtensionsTests
         Should.Throw<ArgumentNullException>(() => nullOptions.UseCosmosProjections(DummyConnectionString));
         Should.Throw<ArgumentException>(() => validOptions.UseCosmosProjections(""));
     }
+
+    public sealed class RoutedReadModel
+    {
+        public string Id { get; set; } = string.Empty;
+    }
+
+    public sealed class RoutedEvent
+    {
+        public string Id { get; set; } = string.Empty;
+    }
+
+    public sealed class RoutedProjection : Aquila.Core.Projections.SingleStreamProjection<RoutedReadModel>
+    {
+        public RoutedProjection()
+        {
+            CreateEvent<RoutedEvent>(e => new RoutedReadModel { Id = e.Id });
+        }
+    }
+
+    [Fact]
+    public void AddAquila_FreezesOptions_SoStorageRoutingIsLiveWithoutAnExplicitInitializeAsync()
+    {
+        // AddAquila does not call InitializeAsync, which used to be the only caller of Freeze().
+        // Routing must be resolvable the moment registration completes, or projection read models
+        // resolve to the document store while the projection writers target projection storage.
+        var services = new ServiceCollection();
+
+        services.AddAquila(options =>
+        {
+            options.UseInMemoryStorage();
+            options.Projections.Add<RoutedProjection>(Aquila.Core.Projections.ProjectionLifecycle.Async);
+        });
+
+        var provider = services.BuildServiceProvider();
+        var store = provider.GetRequiredService<IDocumentStore>();
+
+        store.Options.IsReadOnly.ShouldBeTrue();
+        store.Options.IsProjectionReadModel(typeof(RoutedReadModel)).ShouldBeTrue();
+        store.Options.GetStorageFor(typeof(RoutedReadModel)).ShouldBeSameAs(store.Options.ProjectionStorage);
+    }
+
+    [Fact]
+    public void AddAquila_ReportsPolyglotInlineMisconfiguration_AtRegistrationRatherThanFirstRequest()
+    {
+        var services = new ServiceCollection();
+
+        var ex = Should.Throw<InvalidOperationException>(() =>
+            services.AddAquila(options =>
+            {
+                options.UseCosmos(DummyConnectionString, "PolyglotDb", "Docs");
+                options.ProjectionStorage = new Aquila.Core.Storage.InMemoryStorageProvider();
+                options.Projections.Add<RoutedProjection>(Aquila.Core.Projections.ProjectionLifecycle.Inline);
+            }));
+
+        ex.Message.ShouldContain("ProjectionLifecycle.Inline");
+    }
 }

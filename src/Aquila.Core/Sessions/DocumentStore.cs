@@ -11,6 +11,13 @@ public sealed class DocumentStore : IDocumentStore
     public DocumentStore(StoreOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+
+        // Freeze at construction, not at InitializeAsync. Storage routing (IsProjectionReadModel)
+        // and the polyglot inline-projection guard both live in Freeze(), so deferring it until
+        // InitializeAsync left every session opened from a store that was never explicitly
+        // initialized — which is the documented AddAquila path — routing on an empty registry.
+        options.Freeze();
+
         Options = options;
         Metadata = new StoreMetadata(options);
     }

@@ -224,11 +224,24 @@ public sealed class EventRegistration
 public sealed class StoreOptions
 {
     private string _defaultTenantId = "default";
-    private IDocumentStorageProvider _documentStorage = new InMemoryStorageProvider();
-    private IEventStorageProvider _eventStorage = new InMemoryStorageProvider();
-    private IProjectionStorageProvider _projectionStorage = new InMemoryStorageProvider();
+
+    // A single default provider backs all three SPI roles. Distinct instances would make the
+    // store look polyglot to Freeze() and would leave a caller who overrides only DocumentStorage
+    // with an event store and a projection store pointed at other, empty instances.
+    private readonly InMemoryStorageProvider _defaultStorage = new();
+    private IDocumentStorageProvider _documentStorage;
+    private IEventStorageProvider _eventStorage;
+    private IProjectionStorageProvider _projectionStorage;
+    private bool _projectionStorageConfigured;
     private FrozenSet<Type>? _projectionReadModelTypes;
     private bool _isFrozen;
+
+    public StoreOptions()
+    {
+        _documentStorage = _defaultStorage;
+        _eventStorage = _defaultStorage;
+        _projectionStorage = _defaultStorage;
+    }
 
     public bool IsReadOnly => _isFrozen;
 
@@ -249,8 +262,7 @@ public sealed class StoreOptions
         _projectionReadModelTypes = types.ToFrozenSet();
 
         // 2. Fail-Fast Polyglot Inline Validation
-        bool isPolyglot = !ReferenceEquals(ProjectionStorage, EventStorage);
-        if (isPolyglot)
+        if (IsPolyglot)
         {
             foreach (var proj in Projections.Projections)
             {
@@ -265,6 +277,30 @@ public sealed class StoreOptions
         }
 
         _isFrozen = true;
+    }
+
+    /// <summary>
+    /// True when projection read models and events live in different physical backends, so an
+    /// <see cref="ProjectionLifecycle.Inline"/> projection would have to dual-write across stores
+    /// without a distributed transaction.
+    /// </summary>
+    /// <remarks>
+    /// Compared by <c>ProviderName</c> rather than reference identity. A composite provider serving
+    /// several roles is one object, but the segregated extensions (<c>UseCosmosDocuments</c> +
+    /// <c>UseCosmosEvents</c>) produce distinct provider instances over the same Cosmos account —
+    /// reference inequality would reject that valid configuration at startup. The trade is a false
+    /// negative for two accounts of the same provider family; a false positive is worse, since it
+    /// blocks a working configuration outright.
+    /// </remarks>
+    public bool IsPolyglot
+    {
+        get
+        {
+            var projectionStorage = EffectiveProjectionStorage;
+            if (ReferenceEquals(projectionStorage, _eventStorage)) return false;
+
+            return !string.Equals(projectionStorage.ProviderName, _eventStorage.ProviderName, StringComparison.Ordinal);
+        }
     }
 
     private void AssertNotFrozen()
@@ -305,18 +341,65 @@ public sealed class StoreOptions
         }
     }
 
+    /// <summary>
+    /// Storage for materialized projection read models. When not explicitly configured, projections
+    /// live alongside documents in <see cref="DocumentStorage"/> — a store is only polyglot because
+    /// the caller made it so, never by omission.
+    /// </summary>
     public IProjectionStorageProvider ProjectionStorage
     {
-        get => _projectionStorage;
+        get
+        {
+            if (_projectionStorageConfigured) return _projectionStorage;
+            return _documentStorage as IProjectionStorageProvider ?? _projectionStorage;
+        }
         set
         {
             AssertNotFrozen();
             _projectionStorage = value ?? throw new ArgumentNullException(nameof(value));
+            _projectionStorageConfigured = true;
         }
     }
 
-    public bool IsProjectionReadModel(Type type) =>
-        _projectionReadModelTypes != null && _projectionReadModelTypes.Contains(type);
+    /// <summary>
+    /// The provider that read models are actually routed to, as an <see cref="IDocumentStorageProvider"/>.
+    /// Differs from <see cref="ProjectionStorage"/> only when projection storage was left unconfigured and
+    /// <see cref="DocumentStorage"/> does not implement <see cref="IProjectionStorageProvider"/> — in which
+    /// case read models still belong with the documents.
+    /// </summary>
+    private IDocumentStorageProvider EffectiveProjectionStorage =>
+        _projectionStorageConfigured ? _projectionStorage : _documentStorage;
+
+    /// <summary>
+    /// True when <paramref name="type"/> is a registered projection read model and therefore
+    /// belongs in <see cref="ProjectionStorage"/> rather than <see cref="DocumentStorage"/>.
+    /// </summary>
+    /// <remarks>
+    /// The routing registry is built by <see cref="Freeze"/>. Querying before then cannot return a
+    /// meaningful answer, and silently answering <c>false</c> would route every read model to the
+    /// document store while the projection writers targeted the projection store — so this throws
+    /// instead of guessing.
+    /// </remarks>
+    public bool IsProjectionReadModel(Type type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+
+        var registry = _projectionReadModelTypes
+            ?? throw new InvalidOperationException(
+                "Storage routing was queried before StoreOptions.Freeze() ran, so the projection read-model " +
+                "registry does not exist yet. Freeze() is called by the DocumentStore constructor and by " +
+                "AddAquila(); if you construct StoreOptions directly, call Freeze() once configuration is complete.");
+
+        return registry.Contains(type);
+    }
+
+    /// <summary>
+    /// Resolves the storage provider that owns <paramref name="type"/>. This is the single routing
+    /// decision point — sessions, projections and the daemon all resolve through it, so a read and a
+    /// write of the same type can never disagree about which store holds it.
+    /// </summary>
+    public IDocumentStorageProvider GetStorageFor(Type type) =>
+        IsProjectionReadModel(type) ? EffectiveProjectionStorage : _documentStorage;
 
     public SchemaPolicy Schema { get; } = new();
     public ProjectionRegistration Projections { get; } = new();

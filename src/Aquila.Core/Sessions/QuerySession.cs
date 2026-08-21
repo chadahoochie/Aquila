@@ -408,12 +408,16 @@ public abstract class QuerySessionBase : IQuerySession
     public double CumulativeRequestCharge => DocumentStorage.CumulativeRequestCharge + EventStorage.CumulativeRequestCharge + ProjectionStorage.CumulativeRequestCharge;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected IDocumentStorageProvider GetStorageForType<T>() =>
-        Options.IsProjectionReadModel(typeof(T)) ? Options.ProjectionStorage : Options.DocumentStorage;
+    protected IDocumentStorageProvider GetStorageForType<T>() => Options.GetStorageFor(typeof(T));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected IDocumentStorageProvider GetStorageForType(Type type) =>
-        Options.IsProjectionReadModel(type) ? Options.ProjectionStorage : Options.DocumentStorage;
+    protected IDocumentStorageProvider GetStorageForType(Type type) => Options.GetStorageFor(type);
+
+    /// <summary>
+    /// Resolves the storage provider that owns <typeparamref name="T"/>. Exposed so projection
+    /// writers resolve their target through the same rule the session's readers use.
+    /// </summary>
+    internal IDocumentStorageProvider StorageFor<T>() => Options.GetStorageFor(typeof(T));
 
     public string? CorrelationId { get; set; }
     public string? CausationId { get; set; }
@@ -440,6 +444,11 @@ public abstract class QuerySessionBase : IQuerySession
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         }
+
+        // Opening a session ends configuration. Sessions can be constructed directly from
+        // StoreOptions without passing through DocumentStore, and a session built on unfrozen
+        // options would route every projection read model to the document store.
+        options.Freeze();
 
         DocumentStorage = documentStorage;
         EventStorage = eventStorage;
