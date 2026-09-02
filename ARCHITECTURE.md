@@ -58,7 +58,7 @@ Aquila/
 
 Aquila decouples business domain semantics (sessions, units-of-work, aggregates, and projections) from physical storage engines using a **Tripartite Polyglot Storage Architecture** comprising three independent, first-class SPI contracts defined in [`StorageContracts.cs`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs):
 
-1. **`IEventStorageProvider`**: Append-only event streams, aggregate rehydration, global sequence streaming, and aggregate snapshots (e.g. Azure Cosmos DB, In-Memory).
+1. **`IEventStorageProvider`**: Append-only event streams, aggregate rehydration, global sequence streaming, per-event tagging (`FetchEventsByTagAsync`), and aggregate snapshots (e.g. Azure Cosmos DB, In-Memory).
 2. **`IDocumentStorageProvider`**: Primary domain documents, dirty tracking, units of work, optimistic concurrency, and LINQ querying (e.g. Azure Cosmos DB, Redis, In-Memory).
 3. **`IProjectionStorageProvider`**: Materialized read models, point views, high-throughput batch updates, native instantaneous zero-RU rebuilds ([`PurgeProjectionAsync`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L159)), and ultra-low latency reads (e.g. **Redis**, dedicated Cosmos DB read containers).
 
@@ -77,6 +77,7 @@ classDiagram
         +string ProviderName
         +AppendEventsAsync(streamId, events, expectedVersion) Task
         +FetchEventsAsync(streamId, tenantId, fromVersion) Task~IReadOnlyList~IEvent~~
+        +FetchEventsByTagAsync(tag, fromGlobalSequence, batchSize, tenantId) Task~IReadOnlyList~IEvent~~
         +GetStreamHeaderAsync(streamId, tenantId) Task~EventStreamHeader~
         +SaveSnapshotAsync~TAggregate~(streamId, version, snapshot) Task
         +GetSnapshotAsync~TAggregate~(streamId, tenantId) Task

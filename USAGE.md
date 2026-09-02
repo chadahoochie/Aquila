@@ -142,7 +142,37 @@ IReadOnlyList<IEvent> allEvents = await session.Events.FetchStreamAsync(streamId
 IReadOnlyList<IEvent> partialEvents = await session.Events.FetchStreamAsync(streamId, fromVersion: 2);
 ```
 
-### 4. Aggregate Rehydration
+### 4. Tagging Events
+
+Individual events can carry a set of string tags, independent of the stream they belong to, via [`TaggedEvent`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/TaggedEvent.cs). Use the `*Tagged` counterparts of `StartStream`/`Append` to attach tags at write time, and [`FetchEventsByTagAsync`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Abstractions/IDocumentStore.cs#L45) to stream every event carrying a given tag across the global sequence, regardless of which stream it came from.
+
+```csharp
+using Aquila.Core.Events;
+
+using var session = store.OpenSession();
+
+// Start a stream with per-event tags
+session.Events.StartStreamTagged<AccountAggregate>(streamId,
+[
+    new TaggedEvent(new AccountOpened(streamId, Owner: "Alice", InitialBalance: 500.00m), tags: ["audit", "onboarding"]),
+    new TaggedEvent(new MoneyDeposited(streamId, Amount: 200.00m), tags: ["audit"])
+]);
+
+// Append a tagged event to an existing stream (with optional expected version)
+session.Events.AppendTagged(streamId, expectedVersion: 2,
+[
+    new TaggedEvent(new MoneyWithdrawn(streamId, Amount: 50.00m), tags: ["audit", "large-withdrawal"])
+]);
+
+await session.SaveChangesAsync();
+
+// Read every "audit"-tagged event across all streams, in global sequence order
+IReadOnlyList<IEvent> auditEvents = await session.Events.FetchEventsByTagAsync("audit");
+```
+
+Every [`IEvent`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Events/IEvent.cs) exposes its tags via the `Tags` property (an `IReadOnlySet<string>`, empty by default). The plain, untagged `StartStream`/`Append` overloads are unaffected and simply produce events with an empty tag set.
+
+### 5. Aggregate Rehydration
 
 Aggregates rehydrate their state by defining `Apply(TEvent)` methods for each domain event.
 

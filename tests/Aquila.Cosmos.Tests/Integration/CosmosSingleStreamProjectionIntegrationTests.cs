@@ -110,6 +110,7 @@ public class IntegrationAsyncSingleStreamProjection : SingleStreamProjection<Int
 // ─── Integration Tests ─────────────────────────────────────────────────────
 
 [Collection("CosmosIntegration")]
+[Trait("Category", "Integration")]
 public sealed class CosmosSingleStreamProjectionIntegrationTests
 {
     private readonly CosmosContainerFixture _fixture;
