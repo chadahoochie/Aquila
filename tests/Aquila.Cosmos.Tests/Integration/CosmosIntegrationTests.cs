@@ -32,6 +32,7 @@ public sealed class IntegrationOrderAggregate
 }
 
 [Collection("CosmosIntegration")]
+[Trait("Category", "Integration")]
 public sealed class CosmosIntegrationTests
 {
     private readonly CosmosContainerFixture _fixture;

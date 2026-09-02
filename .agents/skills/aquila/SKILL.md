@@ -19,7 +19,7 @@ Aquila decouples business domain semantics (sessions, units-of-work, aggregates,
 
 ### Storage SPI Contracts
 - [`IDocumentStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L78): Atomic reads, queries, upserts, deletes, and batch execution of `StorageOperation`s.
-- [`IEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L92): Append stream events, fetch streams/global sequences, get stream headers, save/get aggregate snapshots.
+- [`IEventStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L92): Append stream events, fetch streams/global sequences/by-tag, get stream headers, save/get aggregate snapshots.
 - [`IProjectionStorageProvider`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L153): Materialized read models, point views, high-throughput batch updates, and native instantaneous zero-RU rebuilds ([`PurgeProjectionAsync`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Storage/StorageContracts.cs#L159)).
 - [`IProjectionCheckpointStore`](file:///home/chad/source/dotnet/Aquila/src/Aquila.Core/Projections/Daemon/IProjectionCheckpointStore.cs): Durable checkpoint sequence persistence for async projection daemons.
 
@@ -221,6 +221,26 @@ catch (AquilaConcurrencyException ex)
     Console.WriteLine($"Concurrency failure on stream '{ex.StreamId}': Expected {ex.ExpectedVersion}, Got {ex.ActualVersion}");
 }
 ```
+
+### Event Tagging
+Tag individual events with `TaggedEvent`, then query across all streams by tag via `FetchEventsByTagAsync` — independent of `Apply`-based aggregate rehydration:
+```csharp
+using Aquila.Core.Events;
+
+session.Events.StartStreamTagged<OrderAggregate>(streamId,
+[
+    new TaggedEvent(new OrderPlaced(streamId, "CUST-1", 150.00m), tags: ["audit"])
+]);
+session.Events.AppendTagged(streamId, expectedVersion: 1,
+[
+    new TaggedEvent(new ItemAdded(streamId, "SKU-99", 25.00m), tags: ["audit", "large-item"])
+]);
+await session.SaveChangesAsync();
+
+// Global-sequence stream of every "audit"-tagged event, across all streams
+IReadOnlyList<IEvent> auditEvents = await session.Events.FetchEventsByTagAsync("audit");
+```
+Untagged `StartStream`/`Append` overloads still work unchanged and produce events with an empty `Tags` set.
 
 ### Aggregate Rehydration
 Aggregates rehydrate their state by declaring public or internal `Apply(TEvent)` methods:

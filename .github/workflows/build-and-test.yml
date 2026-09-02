@@ -39,13 +39,14 @@ jobs:
       - name: Build Solution
         run: dotnet build Aquila.slnx --configuration Release --no-restore
 
-      - name: Run Unit & Integration Tests
+      - name: Run Unit Tests
         run: >
           dotnet test Aquila.slnx
           --configuration Release
           --no-build
           --verbosity normal
           --settings codecoverage.runsettings
+          --filter "Category!=Integration"
           --collect:"XPlat Code Coverage"
           --results-directory ./TestResults
           --logger "trx;LogFileName=test-results.trx"

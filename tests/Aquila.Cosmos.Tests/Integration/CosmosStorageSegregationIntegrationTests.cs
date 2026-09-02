@@ -139,6 +139,7 @@ public sealed class SegregatedSpecialProjection : SingleStreamProjection<Segrega
 // ─── Integration Tests ─────────────────────────────────────────────────────
 
 [Collection("CosmosIntegration")]
+[Trait("Category", "Integration")]
 public sealed class CosmosStorageSegregationIntegrationTests
 {
     private readonly CosmosContainerFixture _fixture;

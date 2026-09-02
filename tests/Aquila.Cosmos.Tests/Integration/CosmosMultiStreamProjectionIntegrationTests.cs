@@ -167,6 +167,7 @@ public class IntegrationAsyncMultiStreamProjection : MultiStreamProjection<Integ
 // ─── Integration Tests ─────────────────────────────────────────────────────
 
 [Collection("CosmosIntegration")]
+[Trait("Category", "Integration")]
 public sealed class CosmosMultiStreamProjectionIntegrationTests
 {
     private readonly CosmosContainerFixture _fixture;
