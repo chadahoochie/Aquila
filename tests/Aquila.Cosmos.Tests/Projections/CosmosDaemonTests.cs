@@ -105,6 +105,7 @@ public sealed class TestReadOnlyEvent : IEvent
     public string? CorrelationId { get; set; }
     public string? CausationId { get; set; }
     public IReadOnlyDictionary<string, object> Headers { get; set; } = new Dictionary<string, object>();
+    public IReadOnlySet<string> Tags { get; set; } = new HashSet<string>();
     public object Data { get; }
 
     public TestReadOnlyEvent(object data)

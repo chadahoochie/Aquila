@@ -74,6 +74,9 @@ public sealed class InMemoryStorageProvider : IDocumentStorageProvider, IEventSt
     public Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default) =>
         _events.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, tenantId, ct);
 
+    public Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default) =>
+        _events.FetchEventsByTagAsync(tag, fromGlobalSequence, batchSize, tenantId, ct);
+
     public Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default) =>
         _events.GetStreamHeaderAsync(streamId, tenantId, ct);
 

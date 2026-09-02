@@ -56,6 +56,36 @@ public sealed class CosmosEventStore : IEventStore
     public void Append<TAggregate>(string streamId, long expectedVersion, params object[] events) where TAggregate : class =>
         _innerStore.Append<TAggregate>(streamId, expectedVersion, events);
 
+    public void StartStreamTagged<TAggregate>(Guid streamId, IEnumerable<TaggedEvent> events) where TAggregate : class =>
+        _innerStore.StartStreamTagged<TAggregate>(streamId, events);
+
+    public void StartStreamTagged<TAggregate>(string streamId, IEnumerable<TaggedEvent> events) where TAggregate : class =>
+        _innerStore.StartStreamTagged<TAggregate>(streamId, events);
+
+    public void AppendTagged(Guid streamId, IEnumerable<TaggedEvent> events) =>
+        _innerStore.AppendTagged(streamId, events);
+
+    public void AppendTagged(string streamId, IEnumerable<TaggedEvent> events) =>
+        _innerStore.AppendTagged(streamId, events);
+
+    public void AppendTagged(Guid streamId, long expectedVersion, IEnumerable<TaggedEvent> events) =>
+        _innerStore.AppendTagged(streamId, expectedVersion, events);
+
+    public void AppendTagged(string streamId, long expectedVersion, IEnumerable<TaggedEvent> events) =>
+        _innerStore.AppendTagged(streamId, expectedVersion, events);
+
+    public void AppendTagged<TAggregate>(Guid streamId, IEnumerable<TaggedEvent> events) where TAggregate : class =>
+        _innerStore.AppendTagged<TAggregate>(streamId, events);
+
+    public void AppendTagged<TAggregate>(string streamId, IEnumerable<TaggedEvent> events) where TAggregate : class =>
+        _innerStore.AppendTagged<TAggregate>(streamId, events);
+
+    public void AppendTagged<TAggregate>(Guid streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class =>
+        _innerStore.AppendTagged<TAggregate>(streamId, expectedVersion, events);
+
+    public void AppendTagged<TAggregate>(string streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class =>
+        _innerStore.AppendTagged<TAggregate>(streamId, expectedVersion, events);
+
     public Task<IReadOnlyList<IEvent>> FetchStreamAsync(Guid streamId, long fromVersion = 0, CancellationToken ct = default) =>
         _innerStore.FetchStreamAsync(streamId, fromVersion, ct);
 
@@ -64,6 +94,9 @@ public sealed class CosmosEventStore : IEventStore
 
     public Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default) =>
         _innerStore.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, ct);
+
+    public Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, CancellationToken ct = default) =>
+        _innerStore.FetchEventsByTagAsync(tag, fromGlobalSequence, batchSize, ct);
 
     public Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new() =>
         _innerStore.AggregateStreamAsync<TAggregate>(streamId, version, ct);

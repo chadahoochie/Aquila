@@ -20,6 +20,7 @@ public class EventExtensionsTests
         public string? CorrelationId { get; set; }
         public string? CausationId { get; set; }
         public IReadOnlyDictionary<string, object> Headers { get; set; } = ReadOnlyDictionary<string, object>.Empty;
+        public IReadOnlySet<string> Tags { get; set; } = new HashSet<string>();
     }
 
     private class SamplePayload { }

@@ -127,6 +127,7 @@ public sealed class UpcasterRegistry
             var correlationIdProp = envelopeType.GetProperty(nameof(IEvent.CorrelationId))!;
             var causationIdProp = envelopeType.GetProperty(nameof(IEvent.CausationId))!;
             var headersProp = envelopeType.GetProperty(nameof(IEvent.Headers))!;
+            var tagsProp = envelopeType.GetProperty(nameof(IEvent.Tags))!;
 
             var castPayload = Expression.Convert(payloadParam, t);
             var eventTypeConst = Expression.Constant(t.FullName ?? t.Name);
@@ -146,6 +147,7 @@ public sealed class UpcasterRegistry
                 Expression.Call(envVar, correlationIdProp.SetMethod!, Expression.Property(origParam, nameof(IEvent.CorrelationId))),
                 Expression.Call(envVar, causationIdProp.SetMethod!, Expression.Property(origParam, nameof(IEvent.CausationId))),
                 Expression.Call(envVar, headersProp.SetMethod!, Expression.Property(origParam, nameof(IEvent.Headers))),
+                Expression.Call(envVar, tagsProp.SetMethod!, Expression.Property(origParam, nameof(IEvent.Tags))),
                 Expression.Convert(envVar, typeof(IEvent))
             );
 

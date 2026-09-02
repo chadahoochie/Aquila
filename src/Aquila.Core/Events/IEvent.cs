@@ -21,6 +21,7 @@ public interface IEvent
     string? CorrelationId { get; set; }
     string? CausationId { get; set; }
     IReadOnlyDictionary<string, object> Headers { get; set; }
+    IReadOnlySet<string> Tags { get; set; }
 }
 
 /// <summary>
@@ -36,7 +37,10 @@ public interface IEvent<out T> : IEvent where T : class
 /// </summary>
 public sealed class EventEnvelope<T> : IEvent<T> where T : class
 {
+    private static readonly IReadOnlySet<string> EmptyTags = new HashSet<string>();
+
     private IReadOnlyDictionary<string, object>? _headers;
+    private IReadOnlySet<string>? _tags;
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public string StreamId { get; set; } = string.Empty;
@@ -55,6 +59,12 @@ public sealed class EventEnvelope<T> : IEvent<T> where T : class
     {
         get => _headers ?? ReadOnlyDictionary<string, object>.Empty;
         set => _headers = value;
+    }
+
+    public IReadOnlySet<string> Tags
+    {
+        get => _tags ?? EmptyTags;
+        set => _tags = value;
     }
 }
 

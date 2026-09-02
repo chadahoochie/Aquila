@@ -20,7 +20,7 @@ public sealed class CoreEventStore : IEventStore
     private readonly Dictionary<string, long> _streamExpectedVersions = new();
     private readonly ConcurrentDictionary<string, Type> _streamAggregateTypes = new();
 
-    private static readonly ConcurrentDictionary<Type, Func<string, long, object, string, IEvent>> _envelopeFactories = new();
+    private static readonly ConcurrentDictionary<Type, Func<string, long, object, string, IReadOnlySet<string>, IEvent>> _envelopeFactories = new();
     private static readonly ConcurrentDictionary<(Type AggregateType, Type EventType), Action<object, object>?> _applyMethodCache = new();
 
     private readonly Func<(string? CorrelationId, string? CausationId, IReadOnlyDictionary<string, object> Headers)>? _headerProvider;
@@ -56,10 +56,23 @@ public sealed class CoreEventStore : IEventStore
     public void StartStream<TAggregate>(Guid streamId, params object[] events) where TAggregate : class
     {
         ArgumentNullException.ThrowIfNull(events);
-        StartStream<TAggregate>(streamId.ToString(), events);
+        StartStreamTagged<TAggregate>(streamId.ToString(), events.Select(e => new TaggedEvent(e)));
     }
 
     public void StartStream<TAggregate>(string streamId, params object[] events) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        StartStreamTagged<TAggregate>(streamId, events.Select(e => new TaggedEvent(e)));
+    }
+
+    public void StartStreamTagged<TAggregate>(Guid streamId, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        StartStreamTagged<TAggregate>(streamId.ToString(), events);
+    }
+
+    public void StartStreamTagged<TAggregate>(string streamId, IEnumerable<TaggedEvent> events) where TAggregate : class
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
         ArgumentNullException.ThrowIfNull(events);
@@ -67,12 +80,12 @@ public sealed class CoreEventStore : IEventStore
         _streamAggregateTypes[streamId] = typeof(TAggregate);
 
         long version = 0;
-        foreach (var evt in events)
+        foreach (var tagged in events)
         {
-            ArgumentNullException.ThrowIfNull(evt);
+            ArgumentNullException.ThrowIfNull(tagged.Data);
             version++;
-            var envelope = CreateEnvelope(evt.GetType(), streamId, version, evt, _tenantId);
-            ApplyHeaders(envelope, evt);
+            var envelope = CreateEnvelope(tagged.Data.GetType(), streamId, version, tagged.Data, _tenantId, tagged.Tags);
+            ApplyHeaders(envelope, tagged.Data);
             _uncommittedEvents.Add(envelope);
         }
     }
@@ -80,23 +93,49 @@ public sealed class CoreEventStore : IEventStore
     public void Append(Guid streamId, params object[] events)
     {
         ArgumentNullException.ThrowIfNull(events);
-        Append(streamId.ToString(), -1, events);
+        AppendTagged(streamId.ToString(), -1, events.Select(e => new TaggedEvent(e)));
     }
 
     public void Append(string streamId, params object[] events)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
         ArgumentNullException.ThrowIfNull(events);
-        Append(streamId, -1, events);
+        AppendTagged(streamId, -1, events.Select(e => new TaggedEvent(e)));
     }
 
     public void Append(Guid streamId, long expectedVersion, params object[] events)
     {
         ArgumentNullException.ThrowIfNull(events);
-        Append(streamId.ToString(), expectedVersion, events);
+        AppendTagged(streamId.ToString(), expectedVersion, events.Select(e => new TaggedEvent(e)));
     }
 
     public void Append(string streamId, long expectedVersion, params object[] events)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        AppendTagged(streamId, expectedVersion, events.Select(e => new TaggedEvent(e)));
+    }
+
+    public void AppendTagged(Guid streamId, IEnumerable<TaggedEvent> events)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        AppendTagged(streamId.ToString(), -1, events);
+    }
+
+    public void AppendTagged(string streamId, IEnumerable<TaggedEvent> events)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        AppendTagged(streamId, -1, events);
+    }
+
+    public void AppendTagged(Guid streamId, long expectedVersion, IEnumerable<TaggedEvent> events)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        AppendTagged(streamId.ToString(), expectedVersion, events);
+    }
+
+    public void AppendTagged(string streamId, long expectedVersion, IEnumerable<TaggedEvent> events)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
         ArgumentNullException.ThrowIfNull(events);
@@ -107,12 +146,12 @@ public sealed class CoreEventStore : IEventStore
         }
 
         long version = expectedVersion > 0 ? expectedVersion : 0;
-        foreach (var evt in events)
+        foreach (var tagged in events)
         {
-            ArgumentNullException.ThrowIfNull(evt);
+            ArgumentNullException.ThrowIfNull(tagged.Data);
             version++;
-            var envelope = CreateEnvelope(evt.GetType(), streamId, version, evt, _tenantId);
-            ApplyHeaders(envelope, evt);
+            var envelope = CreateEnvelope(tagged.Data.GetType(), streamId, version, tagged.Data, _tenantId, tagged.Tags);
+            ApplyHeaders(envelope, tagged.Data);
             _uncommittedEvents.Add(envelope);
         }
     }
@@ -120,7 +159,7 @@ public sealed class CoreEventStore : IEventStore
     public void Append<TAggregate>(Guid streamId, params object[] events) where TAggregate : class
     {
         ArgumentNullException.ThrowIfNull(events);
-        Append<TAggregate>(streamId.ToString(), -1, events);
+        AppendTagged<TAggregate>(streamId.ToString(), -1, events.Select(e => new TaggedEvent(e)));
     }
 
     public void Append<TAggregate>(string streamId, params object[] events) where TAggregate : class
@@ -128,16 +167,72 @@ public sealed class CoreEventStore : IEventStore
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
         ArgumentNullException.ThrowIfNull(events);
         _streamAggregateTypes[streamId] = typeof(TAggregate);
-        Append(streamId, -1, events);
+        AppendTagged(streamId, -1, events.Select(e => new TaggedEvent(e)));
     }
 
     public void Append<TAggregate>(Guid streamId, long expectedVersion, params object[] events) where TAggregate : class
     {
         ArgumentNullException.ThrowIfNull(events);
-        Append<TAggregate>(streamId.ToString(), expectedVersion, events);
+        AppendTagged<TAggregate>(streamId.ToString(), expectedVersion, events.Select(e => new TaggedEvent(e)));
     }
 
     public void Append<TAggregate>(string streamId, long expectedVersion, params object[] events) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        _streamAggregateTypes[streamId] = typeof(TAggregate);
+        AppendTagged(streamId, expectedVersion, events.Select(e => new TaggedEvent(e)));
+    }
+
+    public void AppendTagged<TAggregate>(Guid streamId, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        AppendTagged<TAggregate>(streamId.ToString(), -1, events);
+    }
+
+    public void AppendTagged<TAggregate>(string streamId, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        _streamAggregateTypes[streamId] = typeof(TAggregate);
+        AppendTagged(streamId, -1, events);
+    }
+
+    public void AppendTagged<TAggregate>(Guid streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        AppendTagged<TAggregate>(streamId.ToString(), expectedVersion, events);
+    }
+
+    public void AppendTagged<TAggregate>(string streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        _streamAggregateTypes[streamId] = typeof(TAggregate);
+        AppendTagged(streamId, expectedVersion, events);
+    }
+
+    public void Append<TAggregate>(Guid streamId, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        Append<TAggregate>(streamId.ToString(), -1, events);
+    }
+
+    public void Append<TAggregate>(string streamId, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentNullException.ThrowIfNull(events);
+        _streamAggregateTypes[streamId] = typeof(TAggregate);
+        Append(streamId, -1, events);
+    }
+
+    public void Append<TAggregate>(Guid streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        Append<TAggregate>(streamId.ToString(), expectedVersion, events);
+    }
+
+    public void Append<TAggregate>(string streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
         ArgumentNullException.ThrowIfNull(events);
@@ -222,6 +317,22 @@ public sealed class CoreEventStore : IEventStore
         return upcastEvents;
     }
 
+    public async Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, CancellationToken ct = default)
+    {
+        var events = await _storage.FetchEventsByTagAsync(tag, fromGlobalSequence, batchSize, _tenantId, ct);
+        if (_upcasters == null || _upcasters.IsEmpty)
+        {
+            return events;
+        }
+
+        var upcastEvents = new List<IEvent>(events.Count);
+        foreach (var evt in events)
+        {
+            upcastEvents.Add(_upcasters.Upcast(evt));
+        }
+        return upcastEvents;
+    }
+
     public Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new()
     {
         return AggregateStreamAsync<TAggregate>(streamId.ToString(), version, ct);
@@ -269,7 +380,9 @@ public sealed class CoreEventStore : IEventStore
         _streamExpectedVersions.Clear();
     }
 
-    private static IEvent CreateEnvelope(Type eventType, string streamId, long version, object data, string tenantId)
+    private static readonly IReadOnlySet<string> EmptyTags = new HashSet<string>();
+
+    private static IEvent CreateEnvelope(Type eventType, string streamId, long version, object data, string tenantId, IReadOnlySet<string>? tags = null)
     {
         var factory = _envelopeFactories.GetOrAdd(eventType, t =>
         {
@@ -277,6 +390,7 @@ public sealed class CoreEventStore : IEventStore
             var versionParam = Expression.Parameter(typeof(long), "version");
             var dataParam = Expression.Parameter(typeof(object), "data");
             var tenantIdParam = Expression.Parameter(typeof(string), "tenantId");
+            var tagsParam = Expression.Parameter(typeof(IReadOnlySet<string>), "tags");
 
             var envelopeType = typeof(EventEnvelope<>).MakeGenericType(t);
             var ctor = Expression.New(envelopeType);
@@ -289,6 +403,7 @@ public sealed class CoreEventStore : IEventStore
             var eventTypeProp = envelopeType.GetProperty("EventType")!;
             var dataProp = envelopeType.GetProperty("Data")!;
             var tenantIdProp = envelopeType.GetProperty("TenantId")!;
+            var tagsProp = envelopeType.GetProperty("Tags")!;
 
             var newGuidCall = Expression.Call(typeof(Guid), nameof(Guid.NewGuid), Type.EmptyTypes);
             var castData = Expression.Convert(dataParam, t);
@@ -304,14 +419,15 @@ public sealed class CoreEventStore : IEventStore
                 Expression.Call(envelopeVar, eventTypeProp.SetMethod!, eventTypeConst),
                 Expression.Call(envelopeVar, dataProp.SetMethod!, castData),
                 Expression.Call(envelopeVar, tenantIdProp.SetMethod!, tenantIdParam),
+                Expression.Call(envelopeVar, tagsProp.SetMethod!, tagsParam),
                 Expression.Convert(envelopeVar, typeof(IEvent))
             );
 
-            return Expression.Lambda<Func<string, long, object, string, IEvent>>(
-                block, streamIdParam, versionParam, dataParam, tenantIdParam).Compile();
+            return Expression.Lambda<Func<string, long, object, string, IReadOnlySet<string>, IEvent>>(
+                block, streamIdParam, versionParam, dataParam, tenantIdParam, tagsParam).Compile();
         });
 
-        return factory(streamId, version, data, tenantId);
+        return factory(streamId, version, data, tenantId, tags ?? EmptyTags);
     }
 
     internal static void ApplyEventToAggregate(object aggregate, object eventData)

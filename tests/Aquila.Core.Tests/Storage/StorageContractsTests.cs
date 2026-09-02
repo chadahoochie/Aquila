@@ -373,6 +373,7 @@ public sealed class StorageContractsTests
         public Task AppendEventsAsync(string streamId, IEnumerable<IEvent> events, long expectedVersion, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IReadOnlyList<IEvent>> FetchEventsAsync(string streamId, string? tenantId = null, long fromVersion = 0, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<IEvent>>(Array.Empty<IEvent>());
         public Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<IEvent>>(Array.Empty<IEvent>());
+        public Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<IEvent>>(Array.Empty<IEvent>());
         public Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default) => Task.FromResult<EventStreamHeader?>(null);
         public Task SaveSnapshotAsync<TAggregate>(string streamId, long version, TAggregate snapshot, string tenantId = "default", CancellationToken ct = default) where TAggregate : class => Task.CompletedTask;
         public Task<(TAggregate? Snapshot, long SnapshotVersion)> GetSnapshotAsync<TAggregate>(string streamId, string tenantId = "default", CancellationToken ct = default) where TAggregate : class => Task.FromResult<(TAggregate?, long)>((null, 0));

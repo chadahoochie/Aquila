@@ -26,9 +26,23 @@ public interface IEventStore
     void Append<TAggregate>(Guid streamId, long expectedVersion, params object[] events) where TAggregate : class;
     void Append<TAggregate>(string streamId, long expectedVersion, params object[] events) where TAggregate : class;
 
+    void StartStreamTagged<TAggregate>(Guid streamId, IEnumerable<TaggedEvent> events) where TAggregate : class;
+    void StartStreamTagged<TAggregate>(string streamId, IEnumerable<TaggedEvent> events) where TAggregate : class;
+
+    void AppendTagged(Guid streamId, IEnumerable<TaggedEvent> events);
+    void AppendTagged(string streamId, IEnumerable<TaggedEvent> events);
+    void AppendTagged(Guid streamId, long expectedVersion, IEnumerable<TaggedEvent> events);
+    void AppendTagged(string streamId, long expectedVersion, IEnumerable<TaggedEvent> events);
+
+    void AppendTagged<TAggregate>(Guid streamId, IEnumerable<TaggedEvent> events) where TAggregate : class;
+    void AppendTagged<TAggregate>(string streamId, IEnumerable<TaggedEvent> events) where TAggregate : class;
+    void AppendTagged<TAggregate>(Guid streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class;
+    void AppendTagged<TAggregate>(string streamId, long expectedVersion, IEnumerable<TaggedEvent> events) where TAggregate : class;
+
     Task<IReadOnlyList<IEvent>> FetchStreamAsync(Guid streamId, long fromVersion = 0, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchStreamAsync(string streamId, long fromVersion = 0, CancellationToken ct = default);
     Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, CancellationToken ct = default);
+    Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, CancellationToken ct = default);
 
     Task<TAggregate?> AggregateStreamAsync<TAggregate>(Guid streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new();
     Task<TAggregate?> AggregateStreamAsync<TAggregate>(string streamId, long version = 0, CancellationToken ct = default) where TAggregate : class, new();
