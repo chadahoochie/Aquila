@@ -105,6 +105,34 @@ public sealed class InMemoryEventStorageProvider : IEventStorageProvider
         return Task.FromResult<IReadOnlyList<IEvent>>(allEvents);
     }
 
+    public Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+
+        if (batchSize <= 0)
+        {
+            return Task.FromResult<IReadOnlyList<IEvent>>(Array.Empty<IEvent>());
+        }
+
+        List<IEvent> allEvents;
+        lock (_eventStreams)
+        {
+            allEvents = _eventStreams.Values
+                .SelectMany(s =>
+                {
+                    lock (s) { return s.ToList(); }
+                })
+                .Where(e => (string.IsNullOrEmpty(tenantId) || e.TenantId == tenantId)
+                            && e.GlobalSequence > fromGlobalSequence
+                            && e.Tags.Contains(tag))
+                .OrderBy(e => e.GlobalSequence)
+                .Take(batchSize)
+                .ToList();
+        }
+
+        return Task.FromResult<IReadOnlyList<IEvent>>(allEvents);
+    }
+
     public Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(streamId);

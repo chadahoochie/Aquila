@@ -265,6 +265,164 @@ public sealed class CosmosEventStorageProviderTests
     }
 
     // ==========================================
+    // 4b. FetchEventsByTagAsync Tests
+    // ==========================================
+
+    [Fact]
+    public async Task FetchEventsByTagAsync_BatchSizeZeroOrNegative_ReturnsEmpty()
+    {
+        var resultZero = await _provider.FetchEventsByTagAsync("Patient", batchSize: 0, ct: TestContext.Current.CancellationToken);
+        resultZero.ShouldBeEmpty();
+
+        var resultNeg = await _provider.FetchEventsByTagAsync("Patient", batchSize: -5, ct: TestContext.Current.CancellationToken);
+        resultNeg.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task FetchEventsByTagAsync_NullOrWhitespaceTag_Throws()
+    {
+        await Should.ThrowAsync<ArgumentException>(() => _provider.FetchEventsByTagAsync("   ", ct: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task FetchEventsByTagAsync_BuildsParameterizedQuery_WithArrayContainsAndTagParameter()
+    {
+        var iterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<object>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<object>>().GetEnumerator());
+        page.RequestCharge.Returns(1.0);
+
+        iterator.HasMoreResults.Returns(true, false);
+        iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        QueryDefinition? captured = null;
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Do<QueryDefinition>(q => captured = q),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(iterator);
+
+        await _provider.FetchEventsByTagAsync("Patient", ct: TestContext.Current.CancellationToken);
+
+        captured.ShouldNotBeNull();
+        captured!.QueryText.ShouldContain("ARRAY_CONTAINS(c.data.Tags, @tag)");
+        captured.QueryText.ShouldNotContain("'Patient'");
+    }
+
+    [Fact]
+    public async Task FetchEventsByTagAsync_WithTenantId_IncludesTenantFilterInQueryText()
+    {
+        var iterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<object>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<object>>().GetEnumerator());
+        page.RequestCharge.Returns(1.0);
+
+        iterator.HasMoreResults.Returns(true, false);
+        iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        QueryDefinition? captured = null;
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Do<QueryDefinition>(q => captured = q),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(iterator);
+
+        await _provider.FetchEventsByTagAsync("Patient", tenantId: "t1", ct: TestContext.Current.CancellationToken);
+
+        captured.ShouldNotBeNull();
+        captured!.QueryText.ShouldContain("c._tenantId = @tenantId");
+    }
+
+    [Fact]
+    public async Task FetchEventsByTagAsync_QueriesAndReturnsMatchingEvents_WithPagination()
+    {
+        var evt1 = new EventEnvelope<TestEventPayload> { StreamId = "s1", Version = 1, TenantId = "t1", GlobalSequence = 10, Tags = new HashSet<string> { "Patient" }, Data = new TestEventPayload("o1", 10m) };
+        var evt2 = new EventEnvelope<TestEventPayload> { StreamId = "s2", Version = 1, TenantId = "t1", GlobalSequence = 20, Tags = new HashSet<string> { "Patient" }, Data = new TestEventPayload("o2", 20m) };
+
+        var env1 = new CosmosDocumentEnvelope<object> { Id = "e1", PartitionKey = "s1", TenantId = "t1", Data = evt1 };
+        var env2 = new CosmosDocumentEnvelope<object> { Id = "e2", PartitionKey = "s2", TenantId = "t1", Data = evt2 };
+
+        var iterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<object>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<object>> { env1, env2 }.GetEnumerator());
+        page.RequestCharge.Returns(4.0);
+
+        iterator.HasMoreResults.Returns(true, false);
+        iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Any<QueryDefinition>(),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(iterator);
+
+        var events = await _provider.FetchEventsByTagAsync("Patient", fromGlobalSequence: 5, batchSize: 10, tenantId: "t1", ct: TestContext.Current.CancellationToken);
+
+        events.Count.ShouldBe(2);
+        events[0].GlobalSequence.ShouldBe(10);
+        events[1].GlobalSequence.ShouldBe(20);
+        _provider.LastRequestCharge.ShouldBe(4.0);
+    }
+
+    [Fact]
+    public async Task FetchEventsByTagAsync_FallbacksToUnsortedQuery_WhenSortedQueryFails()
+    {
+        var evt = new EventEnvelope<TestEventPayload> { StreamId = "s-fb", Version = 1, TenantId = "t1", GlobalSequence = 55, Tags = new HashSet<string> { "Patient" }, Data = new TestEventPayload("o-fb", 10m) };
+        var env = new CosmosDocumentEnvelope<object> { Id = "e-fb", PartitionKey = "s-fb", TenantId = "t1", Data = evt };
+
+        var badRequestEx = new CosmosException("Bad Request", HttpStatusCode.BadRequest, 0, "act-1", 0);
+
+        var sortedIterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        sortedIterator.HasMoreResults.Returns(true);
+        sortedIterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException<FeedResponse<CosmosDocumentEnvelope<object>>>(badRequestEx));
+
+        var fallbackIterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<object>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<object>> { env }.GetEnumerator());
+        fallbackIterator.HasMoreResults.Returns(true, false);
+        fallbackIterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Is<QueryDefinition>(q => q.QueryText.Contains("ORDER BY")),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(sortedIterator);
+
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Is<QueryDefinition>(q => !q.QueryText.Contains("ORDER BY")),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(fallbackIterator);
+
+        var events = await _provider.FetchEventsByTagAsync("Patient", fromGlobalSequence: 0, batchSize: 10, tenantId: "t1", ct: TestContext.Current.CancellationToken);
+        events.Count.ShouldBe(1);
+        events[0].GlobalSequence.ShouldBe(55);
+    }
+
+    [Fact]
+    public async Task FetchEventsByTagAsync_RawJsonFallbackDeserialization()
+    {
+        var evt = new EventEnvelope<TestEventPayload> { StreamId = "s-raw", Version = 1, TenantId = "t1", GlobalSequence = 77, Tags = new HashSet<string> { "Patient" }, Data = new TestEventPayload("o-raw", 5m) };
+        var rawJson = Newtonsoft.Json.JsonConvert.SerializeObject(evt);
+
+        var env = new CosmosDocumentEnvelope<object> { Id = "e-raw", PartitionKey = "s-raw", TenantId = "t1", Data = rawJson };
+
+        var iterator = Substitute.For<FeedIterator<CosmosDocumentEnvelope<object>>>();
+        var page = Substitute.For<FeedResponse<CosmosDocumentEnvelope<object>>>();
+        page.GetEnumerator().Returns(new List<CosmosDocumentEnvelope<object>> { env }.GetEnumerator());
+        page.RequestCharge.Returns(2.0);
+
+        iterator.HasMoreResults.Returns(true, false);
+        iterator.ReadNextAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(page));
+
+        _mockEventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(
+            Arg.Any<QueryDefinition>(),
+            requestOptions: Arg.Any<QueryRequestOptions>())
+            .Returns(iterator);
+
+        var events = await _provider.FetchEventsByTagAsync("Patient", tenantId: "t1", ct: TestContext.Current.CancellationToken);
+
+        events.Count.ShouldBe(1);
+        events[0].GlobalSequence.ShouldBe(77);
+        events[0].Tags.ShouldContain("Patient");
+    }
+
+    // ==========================================
     // 5. GetStreamHeaderAsync Tests
     // ==========================================
 

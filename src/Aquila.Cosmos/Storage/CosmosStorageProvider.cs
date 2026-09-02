@@ -132,6 +132,7 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_docType/?" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/_tenantId/?" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/data/GlobalSequence/?" });
+        props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/data/Tags/*" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/pk/?" });
         props.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/id/?" });
 
@@ -207,6 +208,9 @@ public sealed class CosmosStorageProvider : IDocumentStorageProvider, IEventStor
 
     public Task<IReadOnlyList<IEvent>> FetchGlobalEventsAsync(long fromGlobalSequence, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default) =>
         _events.FetchGlobalEventsAsync(fromGlobalSequence, batchSize, tenantId, ct);
+
+    public Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default) =>
+        _events.FetchEventsByTagAsync(tag, fromGlobalSequence, batchSize, tenantId, ct);
 
     public Task<EventStreamHeader?> GetStreamHeaderAsync(string streamId, string? tenantId = null, CancellationToken ct = default) =>
         _events.GetStreamHeaderAsync(streamId, tenantId, ct);

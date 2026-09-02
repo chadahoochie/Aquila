@@ -470,6 +470,159 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
     }
 
+    public async Task<IReadOnlyList<IEvent>> FetchEventsByTagAsync(string tag, long fromGlobalSequence = 0, int batchSize = 1000, string? tenantId = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+        if (batchSize <= 0)
+        {
+            return Array.Empty<IEvent>();
+        }
+
+        var queryText = string.IsNullOrEmpty(tenantId)
+            ? "SELECT * FROM c WHERE c._docType = '$event' AND ARRAY_CONTAINS(c.data.Tags, @tag) AND c.data.GlobalSequence > @fromGlobalSequence ORDER BY c.data.GlobalSequence"
+            : "SELECT * FROM c WHERE c._docType = '$event' AND c._tenantId = @tenantId AND ARRAY_CONTAINS(c.data.Tags, @tag) AND c.data.GlobalSequence > @fromGlobalSequence ORDER BY c.data.GlobalSequence";
+
+        var queryDef = new QueryDefinition(queryText)
+            .WithParameter("@tag", tag)
+            .WithParameter("@fromGlobalSequence", fromGlobalSequence);
+
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            queryDef = queryDef.WithParameter("@tenantId", tenantId);
+        }
+
+        var requestOptions = new QueryRequestOptions { MaxItemCount = batchSize };
+
+        var events = new List<IEvent>();
+        using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef, requestOptions: requestOptions);
+        if (iterator == null) return events;
+
+        double globalCharge = 0.0;
+        try
+        {
+            while (iterator.HasMoreResults && events.Count < batchSize)
+            {
+                var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+                globalCharge += response.RequestCharge;
+                foreach (var item in response)
+                {
+                    IEvent? @event = item.Data as IEvent;
+                    if (@event == null && item.Data != null)
+                    {
+                        var rawJson = item.Data.ToString();
+                        if (!string.IsNullOrEmpty(rawJson))
+                        {
+                            var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson, PrivateConstructorContractResolver.Settings);
+                            if (envelope != null)
+                            {
+                                _eventTypeResolver.EnsureTypedPayload(envelope);
+                            }
+                            @event = envelope;
+                        }
+                    }
+
+                    if (@event != null)
+                    {
+                        if (long.TryParse(item.Version, out var itemVer) && itemVer > 0 && @event.Version == 0)
+                        {
+                            @event.SetVersion(itemVer);
+                        }
+
+                        if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId)
+                            && @event.GlobalSequence > fromGlobalSequence
+                            && @event.Tags.Contains(tag))
+                        {
+                            events.Add(@event);
+                            if (events.Count >= batchSize) break;
+                        }
+                    }
+                }
+            }
+
+            RecordCharge(globalCharge);
+            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.InternalServerError || ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            _logger?.LogWarning(ex, "Server-side sorted FetchEventsByTagAsync query failed ({StatusCode}). Falling back to unsorted server-side query with client sort.", ex.StatusCode);
+            return await FetchEventsByTagUnsortedFallbackAsync(tag, fromGlobalSequence, batchSize, tenantId, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IReadOnlyList<IEvent>> FetchEventsByTagUnsortedFallbackAsync(string tag, long fromGlobalSequence, int batchSize, string? tenantId, CancellationToken ct)
+    {
+        var sql = "SELECT * FROM c WHERE c._docType = '$event' AND ARRAY_CONTAINS(c.data.Tags, @tag) AND c.data.GlobalSequence > @fromGlobalSequence";
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            sql += " AND c._tenantId = @tenantId";
+        }
+
+        var queryDef = new QueryDefinition(sql)
+            .WithParameter("@tag", tag)
+            .WithParameter("@fromGlobalSequence", fromGlobalSequence);
+
+        if (!string.IsNullOrEmpty(tenantId))
+        {
+            queryDef = queryDef.WithParameter("@tenantId", tenantId);
+        }
+
+        var requestOptions = new QueryRequestOptions { MaxItemCount = batchSize };
+        var events = new List<IEvent>();
+
+        using var iterator = EventContainer.GetItemQueryIterator<CosmosDocumentEnvelope<object>>(queryDef, requestOptions: requestOptions);
+        if (iterator == null) return events;
+
+        double totalCharge = 0.0;
+        try
+        {
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync(ct).ConfigureAwait(false);
+                totalCharge += response.RequestCharge;
+                foreach (var item in response)
+                {
+                    IEvent? @event = item.Data as IEvent;
+                    if (@event == null && item.Data != null)
+                    {
+                        var rawJson = item.Data.ToString();
+                        if (!string.IsNullOrEmpty(rawJson))
+                        {
+                            var envelope = Newtonsoft.Json.JsonConvert.DeserializeObject<EventEnvelope<object>>(rawJson, PrivateConstructorContractResolver.Settings);
+                            if (envelope != null)
+                            {
+                                _eventTypeResolver.EnsureTypedPayload(envelope);
+                            }
+                            @event = envelope;
+                        }
+                    }
+
+                    if (@event != null)
+                    {
+                        if (long.TryParse(item.Version, out var itemVer) && itemVer > 0 && @event.Version == 0)
+                        {
+                            @event.SetVersion(itemVer);
+                        }
+
+                        if ((string.IsNullOrEmpty(tenantId) || item.TenantId == tenantId || @event.TenantId == tenantId)
+                            && @event.GlobalSequence > fromGlobalSequence
+                            && @event.Tags.Contains(tag))
+                        {
+                            events.Add(@event);
+                        }
+                    }
+                }
+            }
+
+            RecordCharge(totalCharge);
+            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to fetch events by tag with unsorted fallback query.");
+            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+        }
+    }
+
     private async Task<IReadOnlyList<IEvent>> FetchGlobalEventsDocTypeFallbackAsync(long fromGlobalSequence, int batchSize, string? tenantId, CancellationToken ct)
     {
         var sql = "SELECT * FROM c WHERE c._docType = '$event'";
