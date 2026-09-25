@@ -37,6 +37,11 @@ public interface IProjection
     void ApplyEvent(IEvent @event, object aggregate);
 
     /// <summary>
+    /// Determines whether this projection can handle the given event.
+    /// </summary>
+    bool CanHandle(IEvent @event) => true;
+
+    /// <summary>
     /// Dispatches a batch of events to this projection in parallel across target identities preserving intra-stream sequence.
     /// </summary>
     Task DispatchBatchAsync(IDocumentStore store, IReadOnlyList<IEvent> events, int maxConcurrency, CancellationToken ct = default) =>
@@ -70,6 +75,30 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
         _handlers[typeof(TEvent)] = (evt, aggregate) => applier((TEvent)evt, aggregate);
     }
 
+    private Action<object, TAggregate>? FindHandler(Type eventType)
+    {
+        if (_handlers.TryGetValue(eventType, out var handler))
+        {
+            return handler;
+        }
+
+        foreach (var (key, value) in _handlers)
+        {
+            if (key.IsAssignableFrom(eventType))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    public virtual bool CanHandle(IEvent @event)
+    {
+        if (@event?.Data == null) return false;
+        return FindHandler(@event.Data.GetType()) != null;
+    }
+
     public void ApplyEvent(IEvent @event, object aggregate)
     {
         ArgumentNullException.ThrowIfNull(@event);
@@ -78,9 +107,10 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
         if (aggregate is not TAggregate typedAggregate) return;
 
         var eventData = @event.Data;
-        if (eventData != null && _handlers.TryGetValue(eventData.GetType(), out var handler))
+        if (eventData != null)
         {
-            handler(eventData, typedAggregate);
+            var handler = FindHandler(eventData.GetType());
+            handler?.Invoke(eventData, typedAggregate);
         }
     }
 
@@ -96,6 +126,7 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
         {
             var evt = events[i];
             if (string.IsNullOrWhiteSpace(evt.StreamId)) continue;
+            if (!CanHandle(evt)) continue;
 
             if (!groups.TryGetValue(evt.StreamId, out var list))
             {
@@ -117,16 +148,25 @@ public abstract class SingleStreamProjection<TAggregate> : IProjection where TAg
         {
             using var session = (DocumentSession)documentStore.OpenSession();
             var streamId = group.Key;
+            var streamEvents = group.Value;
+            if (streamEvents.Count == 0) return;
+
             var existingAggregate = await session.LoadAsync<TAggregate>(streamId, streamId, token).ConfigureAwait(false)
                                      ?? new TAggregate();
 
-            var streamEvents = group.Value;
             streamEvents.Sort(static (a, b) => a.GlobalSequence.CompareTo(b.GlobalSequence));
 
+            bool anyApplied = false;
             for (int i = 0; i < streamEvents.Count; i++)
             {
-                ApplyEvent(streamEvents[i], existingAggregate);
+                if (CanHandle(streamEvents[i]))
+                {
+                    ApplyEvent(streamEvents[i], existingAggregate);
+                    anyApplied = true;
+                }
             }
+
+            if (!anyApplied) return;
 
             var envelope = new DocumentEnvelope<TAggregate>
             {

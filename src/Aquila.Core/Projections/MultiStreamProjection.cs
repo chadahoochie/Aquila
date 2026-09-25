@@ -33,6 +33,13 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
 
     public object? GetIdentity(IEvent @event) => Identity(@event);
 
+    public virtual bool CanHandle(IEvent @event)
+    {
+        if (@event == null) return false;
+        var id = GetIdentity(@event);
+        return id != null && !string.IsNullOrWhiteSpace(id.ToString());
+    }
+
     public abstract bool Apply(IEvent @event, TDoc document);
 
     public void ApplyEvent(IEvent @event, object aggregate)
@@ -50,6 +57,8 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(@event);
+
+        if (!CanHandle(@event)) return;
 
         var id = Identity(@event);
         if (id == null) return;
@@ -108,6 +117,8 @@ public abstract class MultiStreamProjection<TDoc, TId> : IMultiStreamProjection
         for (int i = 0; i < events.Count; i++)
         {
             var evt = events[i];
+            if (!CanHandle(evt)) continue;
+
             var idObj = GetIdentity(evt);
             var identity = idObj?.ToString();
             if (string.IsNullOrWhiteSpace(identity)) continue;
