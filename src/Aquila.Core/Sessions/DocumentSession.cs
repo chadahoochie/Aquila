@@ -320,6 +320,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             {
                 foreach (var @evt in uncommittedEvents)
                 {
+                    if (!multiProj.CanHandle(@evt)) continue;
                     await multiProj.ProcessEventAsync(this, @evt, ct);
                 }
             }
@@ -327,6 +328,7 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
             {
                 foreach (var @evt in uncommittedEvents)
                 {
+                    if (!proj.CanHandle(@evt)) continue;
                     await ProcessSingleStreamInlineEventAsync(proj, @evt, ct);
                 }
             }
@@ -338,6 +340,8 @@ public sealed class DocumentSession : QuerySessionBase, IDocumentSession
 
     private async Task ProcessSingleStreamInlineEventAsync(IProjection proj, IEvent @evt, CancellationToken ct)
     {
+        if (!proj.CanHandle(@evt)) return;
+
         var aggregateId = @evt.StreamId;
         var loadMethod = typeof(IQuerySession)
             .GetMethods()
