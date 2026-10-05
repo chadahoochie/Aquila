@@ -168,6 +168,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(options);
         services.AddSingleton<IDocumentStore>(sp => new DocumentStore(options));
 
+        // Nothing in the DI path called InitializeAsync, so containers went unprovisioned and the
+        // event store's global sequence restarted at 0 on every process start. See AquilaStoreInitializer.
+        services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService, AquilaStoreInitializer>();
+
         services.AddScoped(sp =>
         {
             var store = sp.GetRequiredService<IDocumentStore>();
