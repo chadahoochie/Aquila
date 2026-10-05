@@ -19,6 +19,7 @@ public sealed class ProjectionDaemon : BackgroundService, IProjectionDaemon
     private readonly IDocumentStore _documentStore;
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly ILogger<ProjectionDaemon>? _logger;
+    private bool _warnedNoAsyncProjections;
     private readonly ProjectionDaemonOptions _options;
     private readonly ConcurrentDictionary<string, bool> _stoppedProjections = new();
 
@@ -120,6 +121,12 @@ public sealed class ProjectionDaemon : BackgroundService, IProjectionDaemon
                 var asyncProjections = GetActiveAsyncProjections();
                 if (asyncProjections.Count == 0)
                 {
+                    if (!_warnedNoAsyncProjections)
+                    {
+                        _warnedNoAsyncProjections = true;
+                        _logger?.LogWarning("Projection daemon is running but no projections have Lifecycle = Async; no events will be consumed.");
+                    }
+
                     await Task.Delay(_options.IdlePollingIntervalMs, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
@@ -222,6 +229,19 @@ public sealed class ProjectionDaemon : BackgroundService, IProjectionDaemon
 
     private Task ProcessEventsForProjectionAsync(IProjection proj, IReadOnlyList<IEvent> events, CancellationToken ct)
     {
+        // Projections skip events without a payload, yet the checkpoint still advances past them.
+        // Surface that so "committed but never projected" is visible instead of silent.
+        if (_logger != null)
+        {
+            var unreadable = events.Where(e => e.Data == null).ToList();
+            if (unreadable.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Projection {Projection} skipping {Count} event(s) with no payload (first GlobalSequence {FirstSequence}, stream {StreamId}); checkpoint will advance past them.",
+                    proj.Name, unreadable.Count, unreadable[0].GlobalSequence, unreadable[0].StreamId);
+            }
+        }
+
         return BoundedParallelEventDispatcher.DispatchAsync(_documentStore, proj, events, _options.MaxEventGroupConcurrency, ct);
     }
 }
