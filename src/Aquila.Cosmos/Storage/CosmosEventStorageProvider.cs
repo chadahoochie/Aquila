@@ -524,8 +524,9 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         }
         catch (Exception ex)
         {
+            // A partial, unordered page would let the daemon checkpoint past unread lower sequences.
             _logger?.LogError(ex, "Failed to fetch global events with unsorted fallback query.");
-            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+            throw;
         }
     }
 
@@ -678,7 +679,7 @@ public sealed class CosmosEventStorageProvider : IEventStorageProvider
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Failed to fetch events by tag with unsorted fallback query.");
-            return events.OrderBy(e => e.GlobalSequence).Take(batchSize).ToList();
+            throw;
         }
     }
 
