@@ -1062,3 +1062,24 @@ var options = new QueryOptions()
 var results = await session.QueryAsync<Product>(predicate: null, options: options);
 ```
 
+---
+
+## 19. Microsoft Entra ID Authentication
+
+Redis and Cosmos DB can authenticate with Entra ID (passwordless) instead of connection strings. Each method takes a `TokenCredential`; pass `null` to use `DefaultAzureCredential` (managed identity in Azure, developer sign-in locally).
+
+```csharp
+builder.Services.AddAquilaRedisWithEntra("mycache.redis.cache.windows.net", credential: null);
+
+builder.Services.AddAquila(options =>
+{
+    options.UseCosmosDocumentsWithEntra("https://myaccount.documents.azure.com:443/", credential: null);
+    options.UseCosmosEventsWithEntra("https://myaccount.documents.azure.com:443/", credential: null);
+    options.UseRedisProjectionsWithEntra("mycache.redis.cache.windows.net", credential: null);
+});
+```
+
+Requirements:
+- **Redis:** enable Microsoft Entra authentication on the cache and assign the identity a Redis data access policy (for example Data Owner or Data Contributor). TLS is always on.
+- **Cosmos DB:** assign the *Cosmos DB Built-in Data Contributor* data-plane role. Entra data-plane RBAC cannot create databases or containers, so provision them (and their throughput) ahead of time.
+
