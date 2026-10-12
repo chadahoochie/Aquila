@@ -151,6 +151,46 @@ public static class ServiceCollectionExtensions
         return options.UseCosmosProjections(client, configure);
     }
 
+    /// <summary>
+    /// Creates a <see cref="Microsoft.Azure.Cosmos.CosmosClient"/> authenticated with Microsoft Entra ID.
+    /// Entra data-plane RBAC cannot create databases or containers, so they must be provisioned ahead of time.
+    /// </summary>
+    /// <param name="accountEndpoint">Account URI, for example <c>https://myaccount.documents.azure.com:443/</c>.</param>
+    /// <param name="credential">Entra credential; defaults to <see cref="Azure.Identity.DefaultAzureCredential"/>.</param>
+    internal static Microsoft.Azure.Cosmos.CosmosClient CreateEntraClient(string accountEndpoint, Azure.Core.TokenCredential? credential)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountEndpoint);
+        return new Microsoft.Azure.Cosmos.CosmosClient(accountEndpoint, credential ?? new Azure.Identity.DefaultAzureCredential(), CosmosStorageProvider.CreateDefaultClientOptions());
+    }
+
+    /// <inheritdoc cref="CreateEntraClient"/>
+    public static StoreOptions UseCosmosWithEntra(this StoreOptions options, string accountEndpoint, Azure.Core.TokenCredential? credential, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.UseCosmos(CreateEntraClient(accountEndpoint, credential), configure);
+    }
+
+    /// <inheritdoc cref="CreateEntraClient"/>
+    public static StoreOptions UseCosmosDocumentsWithEntra(this StoreOptions options, string accountEndpoint, Azure.Core.TokenCredential? credential, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.UseCosmosDocuments(CreateEntraClient(accountEndpoint, credential), configure);
+    }
+
+    /// <inheritdoc cref="CreateEntraClient"/>
+    public static StoreOptions UseCosmosEventsWithEntra(this StoreOptions options, string accountEndpoint, Azure.Core.TokenCredential? credential, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.UseCosmosEvents(CreateEntraClient(accountEndpoint, credential), configure);
+    }
+
+    /// <inheritdoc cref="CreateEntraClient"/>
+    public static StoreOptions UseCosmosProjectionsWithEntra(this StoreOptions options, string accountEndpoint, Azure.Core.TokenCredential? credential, Action<Aquila.Cosmos.Configuration.CosmosStorageOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.UseCosmosProjections(CreateEntraClient(accountEndpoint, credential), configure);
+    }
+
     public static IServiceCollection AddAquila(this IServiceCollection services, Action<StoreOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
